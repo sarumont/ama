@@ -1,0 +1,55 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "backdrop_path": "/ihfSiTAWnRQAWn3nJTMLbdrAJoc.jpg",
+      "genre_ids": [28, 12, 878],
+      "id": 68721,
+      "original_language": "en",
+      "original_title": "Iron Man Three",
+      "overview": "When Tony Stark's world is torn apart by a formidable terrorist called the Mandarin, he starts an odyssey of rebuilding and retribution.",
+      "popularity": 51.286,
+      "poster_path": "/qhPtAc1TKbMPqNvcdXSOn9Bn7hZ.jpg",
+      "release_date": "2013-04-18",
+      "title": "Iron Man 3",
+      "video": false,
+      "vote_average": 6.9,
+      "vote_count": 21089
+    },
+    {
+      "adult": false,
+      "backdrop_path": null,
+      "genre_ids": [99],
+      "id": 194588,
+      "original_language": "en",
+      "original_title": "Iron Man 3: A Marvel Super Special",
+      "overview": "",
+      "popularity": 1.24,
+      "poster_path": null,
+      "release_date": "",
+      "title": "Iron Man 3: A Marvel Super Special",
+      "video": false,
+      "vote_average": 0,
+      "vote_count": 0
+    },
+    {
+      "adult": false,
+      "backdrop_path": "/9BBTo63ANSmhC4e6r62OJFuK2GL.jpg",
+      "genre_ids": [878, 28, 12],
+      "id": 24428,
+      "original_language": "en",
+      "original_title": "The Avengers",
+      "overview": "When an unexpected enemy emerges and threatens global safety and security, Nick Fury finds himself in need of a team.",
+      "popularity": 89.771,
+      "poster_path": "/RYMX2wcKCBAr24UyPD7xwmjaTn.jpg",
+      "release_date": "2012-04-25",
+      "title": "The Avengers",
+      "video": false,
+      "vote_average": 7.7,
+      "vote_count": 30012
+    }
+  ],
+  "total_pages": 1,
+  "total_results": 3
+}
