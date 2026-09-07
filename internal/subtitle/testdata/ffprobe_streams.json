@@ -1,0 +1,144 @@
+{
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "h264",
+            "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+            "codec_type": "video",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "24000/1001",
+            "disposition": {
+                "default": 1,
+                "dub": 0,
+                "original": 0,
+                "comment": 0,
+                "lyrics": 0,
+                "karaoke": 0,
+                "forced": 0,
+                "hearing_impaired": 0,
+                "visual_impaired": 0
+            },
+            "tags": {
+                "language": "eng",
+                "BPS": "24500000",
+                "NUMBER_OF_BYTES": "23600000000"
+            }
+        },
+        {
+            "index": 1,
+            "codec_name": "dts",
+            "codec_long_name": "DCA (DTS Coherent Acoustics)",
+            "profile": "DTS-HD MA",
+            "codec_type": "audio",
+            "channels": 6,
+            "sample_rate": "48000",
+            "disposition": {
+                "default": 1,
+                "comment": 0,
+                "forced": 0,
+                "hearing_impaired": 0,
+                "visual_impaired": 0
+            },
+            "tags": {
+                "language": "eng",
+                "title": "Surround 5.1",
+                "BPS": "3800000",
+                "NUMBER_OF_BYTES": "3660000000"
+            }
+        },
+        {
+            "index": 2,
+            "codec_name": "ac3",
+            "codec_long_name": "ATSC A/52A (AC-3)",
+            "codec_type": "audio",
+            "channels": 2,
+            "sample_rate": "48000",
+            "disposition": {
+                "default": 0,
+                "comment": 1,
+                "forced": 0,
+                "hearing_impaired": 0,
+                "visual_impaired": 0
+            },
+            "tags": {
+                "language": "eng",
+                "title": "Director Commentary",
+                "BPS": "192000",
+                "NUMBER_OF_BYTES": "184000000"
+            }
+        },
+        {
+            "index": 3,
+            "codec_name": "hdmv_pgs_subtitle",
+            "codec_long_name": "HDMV Presentation Graphic Stream subtitles",
+            "codec_type": "subtitle",
+            "disposition": {
+                "default": 0,
+                "comment": 0,
+                "forced": 0,
+                "hearing_impaired": 0,
+                "visual_impaired": 0
+            },
+            "tags": {
+                "language": "eng",
+                "BPS": "1400",
+                "NUMBER_OF_FRAMES": "126",
+                "NUMBER_OF_BYTES": "2100000"
+            }
+        },
+        {
+            "index": 4,
+            "codec_name": "hdmv_pgs_subtitle",
+            "codec_long_name": "HDMV Presentation Graphic Stream subtitles",
+            "codec_type": "subtitle",
+            "disposition": {
+                "default": 1,
+                "comment": 0,
+                "forced": 0,
+                "hearing_impaired": 0,
+                "visual_impaired": 0
+            },
+            "tags": {
+                "language": "eng",
+                "BPS-eng": "22000",
+                "NUMBER_OF_FRAMES-eng": "2318",
+                "NUMBER_OF_BYTES-eng": "33000000"
+            }
+        },
+        {
+            "index": 5,
+            "codec_name": "subrip",
+            "codec_long_name": "SubRip subtitle",
+            "codec_type": "subtitle",
+            "disposition": {
+                "default": 0,
+                "comment": 0,
+                "forced": 1,
+                "hearing_impaired": 0,
+                "visual_impaired": 0
+            },
+            "tags": {
+                "language": "SPA",
+                "title": "Spanish (Forced)",
+                "NUMBER_OF_BYTES": "45210"
+            }
+        },
+        {
+            "index": 6,
+            "codec_name": "hdmv_pgs_subtitle",
+            "codec_long_name": "HDMV Presentation Graphic Stream subtitles",
+            "codec_type": "subtitle",
+            "disposition": {
+                "default": 0,
+                "comment": 0,
+                "forced": 0,
+                "hearing_impaired": 1,
+                "visual_impaired": 0
+            },
+            "tags": {
+                "title": "English SDH"
+            }
+        }
+    ]
+}
