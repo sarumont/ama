@@ -22,17 +22,17 @@ Infrastructure background: Docker, Terraform, Kubernetes, OPNsense.
 - **Web**: `html/template` + HTMX (no JS framework)
 - **Config**: YAML via `gopkg.in/yaml.v3`
 - **External tools**: `makemkvcon`, `whipper`, `ffprobe`, `ffmpeg`,
-  `mkvmerge`, `mkvpropedit`, `tesseract` (host-side only)
+  `mkvmerge`, `mkvpropedit`, `tesseract` — all bundled in the container image
 - **APIs**: TMDB (movie ID), MusicBrainz (via whipper), Radarr v3
 
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design. Key points:
 
-- Container handles: disc detection, identification, ripping, subtitle analysis
-- Host handles: PGS→SRT OCR (tesseract not available in container)
-- Communication between container and host: shared bind-mounted volume +
-  manifest JSON files watched by a host-side Python script
+- Single container, single daemon process: disc detection, identification,
+  ripping, subtitle analysis, and PGS→SRT OCR all run in-process
+- Building the container image (with makemkv, whipper, ffmpeg, mkvtoolnix,
+  tesseract bundled) is itself a project deliverable
 - Web UI: queue, confirm, history (3 views only)
 
 ## Build Order
@@ -49,10 +49,12 @@ Suggested implementation order for Claude Code:
 8. `internal/bluray/titles.go` — title selection logic (see rules below)
 9. `internal/identify/tmdb.go` — TMDB search + candidate ranking
 10. `internal/subtitle/analyze.go` — ffprobe wrapper, forced detection
-11. `internal/radarr/client.go` — add movie + trigger scan
-12. `internal/web/` — server + handlers + templates
-13. `cmd/ama/main.go` — wire everything together
-14. `internal/cd/whipper.go` — whipper wrapper (can follow BD path)
+11. `internal/subtitle/ocr.go` — pgsrip/tesseract wrapper, PGS → SRT + mux
+12. `internal/radarr/client.go` — add movie + trigger scan
+13. `internal/web/` — server + handlers + templates
+14. `cmd/ama/main.go` — wire everything together
+15. `internal/cd/whipper.go` — whipper wrapper (can follow BD path)
+16. `Dockerfile` — container image bundling all external tools
 
 ## Title Selection Rules
 

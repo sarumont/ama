@@ -2,9 +2,10 @@
 
 ## Overview
 
-AMA runs as a Docker container with a companion host-side subtitle processor.
-The container handles disc detection, identification, ripping, and analysis.
-The host handles PGS → SRT OCR (tesseract is not available in the container).
+AMA runs as a single Docker container, driven by one daemon process. The
+container image bundles every external tool the pipeline needs — including
+tesseract and mkvtoolnix — so disc detection, identification, ripping,
+analysis, and subtitle OCR all run in-process with no host-side component.
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -13,17 +14,8 @@ The host handles PGS → SRT OCR (tesseract is not available in the container).
 │  udev/poll → detect → identify → rip       │
 │                ↓                            │
 │           manifest.json                     │
-│           subtitle analysis                 │
+│           subtitle analysis + OCR           │
 │           web UI (port 8080)                │
-└──────────────────┬──────────────────────────┘
-                   │ bind-mounted volume
-┌──────────────────▼──────────────────────────┐
-│ Host                                        │
-│                                             │
-│  subtitle-ocr.service (systemd)             │
-│  watches for *.subtitles.json               │
-│  runs PGS → SRT conversion                  │
-│  muxes result into *.processed.mkv          │
 └─────────────────────────────────────────────┘
 ```
 
@@ -49,7 +41,7 @@ ama/
       fuzzy.go             # disc label → title candidate ranking
     subtitle/
       analyze.go           # ffprobe wrapper, PGS detection, forced heuristic
-      ocr.go               # pgsrip subprocess wrapper (host-side)
+      ocr.go               # pgsrip subprocess wrapper, PGS → SRT conversion
     manifest/
       schema.go            # manifest types
       writer.go            # atomic JSON writes
@@ -65,9 +57,8 @@ ama/
         history.html        # completed rips
   config/
     config.go              # config struct + YAML loading
-  scripts/
-    subtitle-ocr.py        # host-side PGS→SRT processor
-    subtitle-ocr.service   # systemd unit for host-side processor
+  Dockerfile               # container image: ama binary + makemkv, whipper,
+                            # ffmpeg, mkvtoolnix, tesseract
   .github/
     workflows/
       ci.yml               # lint + vet + build + test
@@ -101,13 +92,13 @@ ama/
    → detect PGS tracks
    → detect forced candidates (eng, size ratio < 0.25)
    → write *.subtitles.json
-9. manifest/writer.go: write complete manifest JSON
-10. radarr/client.go: add movie by TMDB ID + trigger import scan
-11. eject disc
-12. [host] subtitle-ocr.py: triggered by new *.subtitles.json
-    → PGS → SRT via pgsrip/tesseract
-    → mkvmerge: produce *.processed.mkv
-    → update manifest: subtitles.converted = true
+9. subtitle/ocr.go: for each PGS track
+   → PGS → SRT via pgsrip/tesseract
+   → mkvmerge: produce *.processed.mkv (original preserved)
+   → update manifest: subtitles[n].converted = true
+10. manifest/writer.go: write complete manifest JSON
+11. radarr/client.go: add movie by TMDB ID + trigger import scan
+12. eject disc
 ```
 
 ### CD
@@ -143,7 +134,7 @@ considered complete.
 
 ## Subtitle Processing
 
-### In-Container (analyze.go)
+### Analysis (analyze.go)
 
 - Runs immediately post-rip on all MKV outputs
 - Uses `ffprobe` to enumerate subtitle streams
@@ -152,9 +143,9 @@ considered complete.
   < 25% the size of the larger
 - Writes `{movie}.subtitles.json` alongside the MKV
 
-### Host-Side (subtitle-ocr.py)
+### OCR (ocr.go)
 
-- Watches the output volume for new `*.subtitles.json` files
+- Runs in the same process immediately after analysis
 - For each PGS track: extracts `.sup` via ffmpeg, OCRs via pgsrip/tesseract
 - Sets forced + default flags on confirmed forced candidates
 - Muxes converted SRT tracks into `{movie}.processed.mkv` (original preserved)
