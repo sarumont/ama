@@ -1,0 +1,29 @@
+# VCS
+.git
+.gitignore
+.github
+
+# Docs — not needed to build the ama binary
+docs
+*.md
+LICENSE
+
+# Test fixtures (recorded makemkvcon / ffprobe output) are large and unused
+# by the build
+testdata
+
+# Local config and secrets — must never end up in an image layer
+ama.yaml
+*.local.yaml
+.env
+
+# Local build output
+/ama
+/out
+/dist
+
+# Container build files
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
