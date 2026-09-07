@@ -63,6 +63,12 @@ type SubtitleStream struct {
 	// NeedsOCR is true for bitmap (PGS) streams, which must be OCRed before
 	// they can be muxed as text subtitles.
 	NeedsOCR bool `json:"needs_ocr"`
+	// Converted is set by Converter.Convert once this stream has been OCRed to
+	// SRT. It stays false for streams that never needed OCR.
+	Converted bool `json:"converted"`
+	// ConversionError holds the reason OCR failed for this stream, and is nil
+	// whenever OCR succeeded or was never attempted.
+	ConversionError *string `json:"conversion_error"`
 }
 
 // Sidecar is the on-disk form of {movie}.subtitles.json. It wraps the stream
