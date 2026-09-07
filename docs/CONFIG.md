@@ -70,10 +70,20 @@ AMA_WEB_PORT=9090
 
 ## Docker Compose Example
 
+The image is **built locally, never pulled**. MakeMKV's binary package is not
+freely redistributable, so the Dockerfile downloads and compiles MakeMKV at
+build time and no image with MakeMKV in it is published anywhere. The build
+therefore requires you to accept the [MakeMKV EULA](https://www.makemkv.com/eula/)
+explicitly via a build arg.
+
 ```yaml
 services:
   ama:
     image: ama:latest
+    build:
+      context: .
+      args:
+        MAKEMKV_ACCEPT_EULA: "yes"
     devices:
       - /dev/sr0:/dev/sr0
     volumes:
@@ -85,4 +95,31 @@ services:
       AMA_TMDB_API_KEY: "${TMDB_API_KEY}"
     ports:
       - "8080:8080"
+```
+
+Then `docker compose build && docker compose up -d`, or without compose:
+
+```
+docker build --build-arg MAKEMKV_ACCEPT_EULA=yes -t ama:latest .
+```
+
+### Build Arguments
+
+| Arg | Default | Purpose |
+|---|---|---|
+| `MAKEMKV_ACCEPT_EULA` | `no` | Must be `yes`; the build fails otherwise |
+| `MAKEMKV_VERSION` | `1.18.4` | MakeMKV beta builds expire ~60 days after release — bump this and rebuild when `makemkvcon` reports an expired version |
+| `TESSERACT_LANGS` | `eng osd fra deu spa ita jpn` | Tesseract language packs bundled into the image |
+| `PGSRIP_VERSION` | `0.1.12` | pgsrip release used for PGS → SRT |
+
+`subtitle.ocr_languages` may only name languages present in `TESSERACT_LANGS` —
+the set is fixed at build time and AMA fails fast at startup on an unknown
+language rather than installing packs at runtime. To add one, rebuild with the
+extra [Debian `tesseract-ocr-<code>`](https://packages.debian.org/trixie/tesseract-ocr)
+packs appended:
+
+```
+docker build --build-arg MAKEMKV_ACCEPT_EULA=yes \
+             --build-arg TESSERACT_LANGS="eng osd fra deu spa ita jpn nld swe" \
+             -t ama:latest .
 ```
