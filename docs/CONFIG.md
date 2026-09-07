@@ -55,7 +55,10 @@ disc:
 ## Environment Variable Overrides
 
 All config values can be overridden via environment variables using the prefix
-`AMA_` and double underscores for nesting:
+`AMA_` and a single underscore for nesting (a double underscore is also
+accepted, for disambiguating a field name that itself contains an underscore
+— e.g. `AMA_SUBTITLE__FORCED_RATIO_THRESHOLD`; if both forms are set for the
+same field, the single-underscore form wins):
 
 ```
 AMA_MAKEMKV_KEY=...
