@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # "Latest stable" per docs/CLAUDE.md. Floor on the minor line so patch
+  # releases are picked up automatically; go.mod may declare an older minor.
+  GO_VERSION: "1.27.x"
+  GOLANGCI_LINT_VERSION: "v2.13.2"
+
+jobs:
+  ci:
+    name: lint + vet + build + test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # Every step below wraps a Makefile target so a contributor can
+      # reproduce a CI failure locally with the same one-line command.
+      - name: gofmt
+        run: make fmt-check
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: go vet
+        run: make vet
+
+      - name: go build
+        run: make build
+
+      - name: go test
+        run: make test
