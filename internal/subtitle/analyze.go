@@ -50,6 +50,16 @@ type SubtitleStream struct {
 	ForcedFlagInSource  bool  `json:"forced_flag_in_source"`
 	DefaultFlagInSource bool  `json:"default_flag_in_source"`
 	HearingImpaired     bool  `json:"hearing_impaired"`
+	// ForcedCandidate is set by DetectForcedCandidates when the size-ratio
+	// heuristic infers that this stream is the forced-subtitle track.
+	ForcedCandidate bool `json:"forced_candidate"`
+	// ForcedCandidateReason explains why ForcedCandidate was set. It is nil
+	// whenever ForcedCandidate is false.
+	ForcedCandidateReason *string `json:"forced_candidate_reason"`
+	// PairedWithStreamIndex is the stream this one was compared against during
+	// forced detection. Both streams of a matched pair point at each other; it
+	// is nil for streams that were never paired.
+	PairedWithStreamIndex *int `json:"paired_with_stream_index"`
 	// NeedsOCR is true for bitmap (PGS) streams, which must be OCRed before
 	// they can be muxed as text subtitles.
 	NeedsOCR bool `json:"needs_ocr"`
