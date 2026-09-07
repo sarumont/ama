@@ -1,0 +1,6 @@
+# Hand-constructed sample, not captured from a real drive. Demonstrates a
+# fixture with recorded stderr and a non-zero exit status.
+makemkvcon
+-r
+info
+disc:1

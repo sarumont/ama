@@ -112,6 +112,14 @@ Always write atomically (write to temp file, rename).
 - Integration tests should use recorded `makemkvcon` / `ffprobe` output
   fixtures rather than real disc drives
 - Store fixtures in `testdata/`
+- Never call `exec.Command` directly from a package that shells out — depend on
+  a `Run(ctx, name string, args ...string) ([]byte, error)` runner interface so
+  tests can substitute recorded output
+- `internal/testutil` provides `FakeRunner` (inline canned output) and
+  `FixtureRunner` (replays recorded captures, failing the test on an
+  unrecorded invocation)
+- [testdata/README.md](../testdata/README.md) is the contributor guide: fixture
+  layout, how to record from real hardware, and what to scrub before committing
 
 ## Out of Scope (v1)
 

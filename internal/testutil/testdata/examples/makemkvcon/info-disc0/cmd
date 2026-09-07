@@ -1,0 +1,7 @@
+# Hand-constructed sample, not captured from a real disc: no optical drive or
+# MakeMKV license is available in this environment. Shaped after makemkvcon
+# v1.17.9 robot mode output.
+makemkvcon
+-r
+info
+disc:0
