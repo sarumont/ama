@@ -1,0 +1,13 @@
+# Compiled binaries
+/ama
+/bin/
+*.exe
+*.test
+
+# Go tooling output
+*.out
+coverage.*
+
+# Local development config (the committed reference lives in docs/CONFIG.md)
+/ama.yaml
+/ama.yml
