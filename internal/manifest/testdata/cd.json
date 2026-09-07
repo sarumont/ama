@@ -1,0 +1,40 @@
+{
+  "id": "8f14e45f-ceea-467a-9b0a-1c0b9a1c9f21",
+  "ama_version": "0.1.0",
+  "ripped_at": "2026-08-19T18:02:00Z",
+  "status": "complete",
+
+  "disc": {
+    "type": "cd",
+    "label": null,
+    "device": "/dev/sr0"
+  },
+
+  "identification": {
+    "method": "musicbrainz",
+    "mb_release_id": "b3f0a4a1-4d05-4f2e-9c39-1f0d4a2f8c11",
+    "mb_release_group_id": "6a1e9c2d-0f77-4a1b-8ef3-2b7c5d9e0a44",
+    "artist": "Jamestown Revival",
+    "album": "The Education of a Wandering Man",
+    "year": 2014,
+    "confirmed": true,
+    "confirmed_at": "2026-08-19T18:02:30Z"
+  },
+
+  "tracks": [
+    {
+      "number": 1,
+      "title": "Where I Need to Be",
+      "duration_seconds": 207,
+      "accurate_rip": true,
+      "output_file": "01 - Where I Need to Be.flac"
+    }
+  ],
+
+  "output": {
+    "path": "/media/library/music/Jamestown Revival/The Education of a Wandering Man/"
+  },
+
+  "warnings": [],
+  "errors": []
+}
