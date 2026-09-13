@@ -13,9 +13,9 @@ LICENSE
 testdata
 
 # Local config and secrets — must never end up in an image layer
-ama.yaml
-*.local.yaml
-.env
+**/ama.yaml
+**/*.local.yaml
+**/.env
 
 # Local build output
 /ama
