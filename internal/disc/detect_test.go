@@ -1,3 +1,5 @@
+//go:build linux
+
 package disc
 
 import (
@@ -33,6 +35,9 @@ type fakeChecker struct {
 func (f *fakeChecker) Status(string) (DriveStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.steps) == 0 {
+		return StatusNoInfo, nil
+	}
 	s := f.steps[min(f.calls, len(f.steps)-1)]
 	f.calls++
 	return s.status, s.err
@@ -126,6 +131,22 @@ func TestDetectorEvents(t *testing.T) {
 			steps: []step{{status: StatusDiscOK}, {status: StatusNoInfo}},
 			want:  []EventType{DiscInserted},
 		},
+		{
+			name: "presence is dropped after sustained errors so a later disc is re-announced",
+			steps: []step{
+				{status: StatusDiscOK},
+				{err: errDevice},
+				{err: errDevice},
+				{err: errDevice},
+				{status: StatusDiscOK},
+			},
+			want: []EventType{DiscInserted, DriveError, DriveError, DriveError, DiscInserted},
+		},
+		{
+			name:  "drive never answers at all",
+			steps: nil,
+			want:  nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -201,6 +222,16 @@ func TestDetectorRunStopsOnCancel(t *testing.T) {
 	}
 	if _, ok := <-d.Events(); ok {
 		t.Error("events channel still open after Run returned")
+	}
+}
+
+func TestNewClampsNonPositiveInterval(t *testing.T) {
+	t.Parallel()
+
+	for _, interval := range []time.Duration{0, -time.Second} {
+		if got := New(testDevice, interval, &fakeChecker{}).interval; got != minInterval {
+			t.Errorf("New(_, %v, _).interval = %v, want %v", interval, got, minInterval)
+		}
 	}
 }
 

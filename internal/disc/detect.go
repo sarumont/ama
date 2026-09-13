@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package disc watches an optical drive and reports when a disc appears or
 // goes away. It deliberately knows nothing about what kind of disc it is —
 // identifying Blu-ray versus CD is a separate concern.
@@ -157,11 +159,20 @@ type Detector struct {
 	events   chan Event
 }
 
+// minInterval is the smallest poll interval New accepts. time.NewTicker
+// panics on a non-positive duration, and config.Load deliberately does not
+// validate, so a config typo like disc.poll_interval: 0 must not be able to
+// crash the daemon.
+const minInterval = time.Second
+
 // New returns a Detector for device, polling every interval. A nil checker
-// selects IoctlChecker.
+// selects IoctlChecker. A non-positive interval is clamped to minInterval.
 func New(device string, interval time.Duration, checker StatusChecker) *Detector {
 	if checker == nil {
 		checker = IoctlChecker{}
+	}
+	if interval <= 0 {
+		interval = minInterval
 	}
 	return &Detector{
 		device:   device,
@@ -191,6 +202,14 @@ func (d *Detector) Run(ctx context.Context) {
 	defer ticker.Stop()
 
 	present := false
+	// staleChecks counts consecutive polls that could not confirm the
+	// drive's state (a failed open, or CDS_NO_INFO). If it crosses
+	// maxStaleChecks while present is true, present is dropped: otherwise a
+	// device that stays unreadable (unplugged, lost passthrough) forever
+	// strands the detector believing a disc is still loaded, and a
+	// different disc inserted once it recovers is never announced.
+	const maxStaleChecks = 3
+	staleChecks := 0
 	for {
 		status, err := d.checker.Status(d.device)
 		switch {
@@ -198,19 +217,32 @@ func (d *Detector) Run(ctx context.Context) {
 			// Surface it and keep polling: an unplugged or busy device is
 			// usually transient, and dropping the state we hold would
 			// re-announce the same disc once the device recovers.
+			staleChecks++
+			if staleChecks >= maxStaleChecks {
+				present = false
+			}
 			if !d.emit(ctx, Event{Type: DriveError, Device: d.device, Err: err}) {
 				return
 			}
+		case status == StatusNoInfo:
+			staleChecks++
+			if staleChecks >= maxStaleChecks {
+				present = false
+			}
 		case status == StatusDiscOK && !present:
+			staleChecks = 0
 			present = true
 			if !d.emit(ctx, Event{Type: DiscInserted, Device: d.device}) {
 				return
 			}
 		case (status == StatusNoDisc || status == StatusTrayOpen) && present:
+			staleChecks = 0
 			present = false
 			if !d.emit(ctx, Event{Type: DiscRemoved, Device: d.device}) {
 				return
 			}
+		default:
+			staleChecks = 0
 		}
 		// StatusNotReady and StatusNoInfo are deliberately indeterminate: a
 		// disc spinning up is not yet an insertion, and a drive that briefly
