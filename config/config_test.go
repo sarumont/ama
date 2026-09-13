@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -526,6 +527,16 @@ func TestValidate(t *testing.T) {
 			name:    "auto confirm threshold out of range",
 			mutate:  func(c *Config) { c.TMDB.AutoConfirmThreshold = floatPtr(1.5) },
 			wantErr: []string{"tmdb.auto_confirm_threshold"},
+		},
+		{
+			name:    "auto confirm threshold NaN",
+			mutate:  func(c *Config) { c.TMDB.AutoConfirmThreshold = floatPtr(math.NaN()) },
+			wantErr: []string{"tmdb.auto_confirm_threshold"},
+		},
+		{
+			name:    "forced ratio threshold NaN",
+			mutate:  func(c *Config) { c.Subtitle.ForcedRatioThreshold = math.NaN() },
+			wantErr: []string{"subtitle.forced_ratio_threshold"},
 		},
 		{
 			name:    "empty output paths",

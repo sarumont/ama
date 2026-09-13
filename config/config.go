@@ -196,7 +196,7 @@ func (c *Config) Validate() error {
 	if c.TMDB.APIKey == "" {
 		fail("tmdb.api_key is required")
 	}
-	if t := c.TMDB.AutoConfirmThreshold; t != nil && (*t < 0 || *t > 1) {
+	if t := c.TMDB.AutoConfirmThreshold; t != nil && !(*t >= 0 && *t <= 1) {
 		fail("tmdb.auto_confirm_threshold must be between 0 and 1, got %v", *t)
 	}
 	if c.MakeMKV.MinTrackDuration < 0 {
@@ -216,7 +216,7 @@ func (c *Config) Validate() error {
 	if c.Web.Port < 1 || c.Web.Port > 65535 {
 		fail("web.port must be between 1 and 65535, got %d", c.Web.Port)
 	}
-	if c.Subtitle.ForcedRatioThreshold <= 0 || c.Subtitle.ForcedRatioThreshold >= 1 {
+	if !(c.Subtitle.ForcedRatioThreshold > 0 && c.Subtitle.ForcedRatioThreshold < 1) {
 		fail("subtitle.forced_ratio_threshold must be between 0 and 1 exclusive, got %v", c.Subtitle.ForcedRatioThreshold)
 	}
 	if c.Disc.PollInterval < 1 {
