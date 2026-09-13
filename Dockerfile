@@ -74,7 +74,7 @@ WORKDIR /build
 RUN set -eux; \
     wget -O sha256sums.txt.sig "https://www.makemkv.com/download/makemkv-sha-${MAKEMKV_VERSION}.txt"; \
     GNUPGHOME="$(mktemp -d)"; export GNUPGHOME; \
-    gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$MAKEMKV_GPG_KEY"; \
+    gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys "$MAKEMKV_GPG_KEY"; \
     gpg --batch --decrypt --output sha256sums.txt sha256sums.txt.sig; \
     gpgconf --kill all; \
     rm -rf "$GNUPGHOME" sha256sums.txt.sig
