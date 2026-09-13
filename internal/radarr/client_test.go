@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,7 +50,7 @@ func (f *fakeArr) serve(w http.ResponseWriter, r *http.Request) {
 		apiKey: r.Header.Get("X-Api-Key"),
 	}
 	if r.Body != nil {
-		if err := json.NewDecoder(r.Body).Decode(&rec.body); err != nil && err.Error() != "EOF" {
+		if err := json.NewDecoder(r.Body).Decode(&rec.body); err != nil && !errors.Is(err, io.EOF) {
 			f.t.Errorf("decoding request body for %s: %v", r.URL.Path, err)
 		}
 	}
