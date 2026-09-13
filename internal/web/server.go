@@ -11,6 +11,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sarumont/ama/config"
@@ -107,9 +109,26 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/status/{id}", s.handleStatus)
 
 	// Vendored assets, served locally so the box can be offline.
-	mux.Handle("GET /static/", http.FileServerFS(staticFS))
+	mux.Handle("GET /static/", staticHandler())
 
 	return mux
+}
+
+// staticHandler serves embedded static assets. It rejects paths ending in
+// "/" so a missing filename 404s instead of returning a directory listing,
+// and it sets a long-lived Cache-Control header since assets are immutable
+// per build (embed.FS reports a zero ModTime, so there is no Last-Modified
+// or ETag for the browser to validate against otherwise).
+func staticHandler() http.Handler {
+	fileServer := http.FileServerFS(staticFS)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 // ServeHTTP lets the server be mounted directly, which tests rely on.
@@ -124,6 +143,7 @@ func (s *Server) Start(ctx context.Context) error {
 	addr := net.JoinHostPort(s.cfg.Web.Host, fmt.Sprint(s.cfg.Web.Port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
+		close(s.ready)
 		return fmt.Errorf("web: listening on %s: %w", addr, err)
 	}
 	s.addr = ln.Addr().String()
@@ -173,12 +193,15 @@ func (s *Server) placeholder(w http.ResponseWriter, title string) {
 		Message string
 	}{Title: title, Message: "Not yet implemented."}
 
+	var buf bytes.Buffer
+	if err := s.tmpl.ExecuteTemplate(&buf, "placeholder.html", data); err != nil {
+		s.log.Error("rendering template", "template", "placeholder.html", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotImplemented)
-	if err := s.tmpl.ExecuteTemplate(w, "placeholder.html", data); err != nil {
-		// The status line is already written, so this can only be logged.
-		s.log.Error("rendering template", "template", "placeholder.html", "err", err)
-	}
+	_, _ = buf.WriteTo(w)
 }
 
 func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +231,10 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
 }
+
+// Unwrap lets http.ResponseController reach the underlying writer, so
+// handlers keep Flush/Hijack/ReadFrom through this middleware.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
