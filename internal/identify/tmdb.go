@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -120,6 +121,7 @@ func New(apiKey string, httpClient *http.Client, baseURL string) *Client {
 	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
+	baseURL = strings.TrimSuffix(baseURL, "/")
 	return &Client{baseURL: baseURL, apiKey: apiKey, http: httpClient}
 }
 
