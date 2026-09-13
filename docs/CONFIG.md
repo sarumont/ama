@@ -107,6 +107,11 @@ services:
       - "8080:8080"
 ```
 
+The image's `HEALTHCHECK` curls `127.0.0.1:${AMA_WEB_PORT:-8080}` — it cannot
+see a `web.port` set only in `ama.yaml`. If you change the listen port, set
+`AMA_WEB_PORT` to match (as in the environment block above) or the
+healthcheck will report `unhealthy` even though the server is up.
+
 Then `docker compose build && docker compose up -d`, or without compose:
 
 ```
