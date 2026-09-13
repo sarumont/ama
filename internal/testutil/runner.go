@@ -26,17 +26,22 @@ func Key(name string, args ...string) string {
 	return strings.Join(append([]string{name}, args...), " ")
 }
 
-// FakeRunner is a Runner returning canned output, for tests whose sample data is
-// small enough to live inline. Responses is consulted first, keyed by [Key]; if
-// the invocation is not listed, Sequence supplies output by call order. An
-// invocation matching neither returns an error, and Err short-circuits every
-// call for testing failure paths. Prefer [FixtureRunner] once the sample data
-// grows past a few lines.
+// FakeRunner is a Runner and [CaptureRunner] returning canned output, for tests
+// whose sample data is small enough to live inline. Responses is consulted
+// first, keyed by [Key]; if the invocation is not listed, Sequence supplies
+// output by call order. An invocation matching neither returns an error, and
+// Err short-circuits every call for testing failure paths. Prefer
+// [FixtureRunner] once the sample data grows past a few lines.
 //
 // A FakeRunner is not safe for concurrent use.
 type FakeRunner struct {
 	// Responses maps Key(name, args...) to that invocation's stdout.
 	Responses map[string][]byte
+
+	// StderrResponses maps Key(name, args...) to that invocation's stderr, for
+	// RunCapture callers. An invocation absent from StderrResponses gets empty
+	// stderr.
+	StderrResponses map[string][]byte
 
 	// Sequence supplies stdout by call order for invocations absent from
 	// Responses: the first unmatched call gets Sequence[0], and so on.
@@ -53,20 +58,26 @@ type FakeRunner struct {
 }
 
 // Run records the invocation and returns its canned output.
-func (r *FakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+func (r *FakeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	stdout, _, err := r.RunCapture(ctx, name, args...)
+	return stdout, err
+}
+
+// RunCapture records the invocation and returns its canned stdout and stderr.
+func (r *FakeRunner) RunCapture(_ context.Context, name string, args ...string) (stdout, stderr []byte, err error) {
 	key := Key(name, args...)
 	r.Calls = append(r.Calls, key)
 
 	if r.Err != nil {
-		return nil, r.Err
+		return nil, nil, r.Err
 	}
 	if out, ok := r.Responses[key]; ok {
-		return out, nil
+		return out, r.StderrResponses[key], nil
 	}
 	if r.seq < len(r.Sequence) {
 		out := r.Sequence[r.seq]
 		r.seq++
-		return out, nil
+		return out, r.StderrResponses[key], nil
 	}
-	return nil, fmt.Errorf("testutil: FakeRunner has no response for %q (call %d)", key, len(r.Calls))
+	return nil, nil, fmt.Errorf("testutil: FakeRunner has no response for %q (call %d)", key, len(r.Calls))
 }
