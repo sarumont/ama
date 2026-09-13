@@ -363,6 +363,12 @@ func TestClassifyDoesNotModifyInput(t *testing.T) {
 	tracks := []Track{track(0, 659), track(1, 7647), commentaryTrack(2, 3000), track(3, 30)}
 	before := make([]Track, len(tracks))
 	copy(before, tracks)
+	// copy above only duplicates the Track structs; AudioTracks is a slice
+	// field, so before and tracks would otherwise share one backing array and
+	// a write through either would be invisible to reflect.DeepEqual below.
+	for i := range before {
+		before[i].AudioTracks = append([]AudioTrack(nil), tracks[i].AudioTracks...)
+	}
 
 	Classify(tracks, 60)
 

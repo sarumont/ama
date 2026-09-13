@@ -106,6 +106,11 @@ const (
 // The result is ordered by descending duration, i.e. the feature is always
 // first. tracks is not modified. An empty (or nil) input yields an empty
 // result and no feature is invented.
+//
+// The returned Tracks share their AudioTracks backing storage with tracks:
+// Classify copies the Track structs but not the audio-stream slices, so a
+// write through a returned Classification's AudioTracks is visible in the
+// caller's original slice too.
 func Classify(tracks []Track, minTrackDuration int) []Classification {
 	out := make([]Classification, 0, len(tracks))
 	if len(tracks) == 0 {
