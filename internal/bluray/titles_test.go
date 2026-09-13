@@ -267,6 +267,16 @@ func TestClassify(t *testing.T) {
 			},
 		},
 		{
+			name:             "all durations unparsed (zero): feature is arbitrary but no phantom alternate cuts",
+			tracks:           []Track{track(0, 0), track(1, 0), track(2, 0)},
+			minTrackDuration: 60,
+			want: []want{
+				{index: 0, role: RoleFeature},
+				{index: 1, role: RoleSkip},
+				{index: 2, role: RoleSkip},
+			},
+		},
+		{
 			name: "full disc: feature, alternate cut, commentary, extras and padding",
 			tracks: []Track{
 				track(0, 7647),

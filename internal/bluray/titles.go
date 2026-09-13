@@ -159,8 +159,15 @@ func Classify(tracks []Track, minTrackDuration int) []Classification {
 	return out
 }
 
-// isAlternateCut reports whether duration is within 10% of the feature's.
+// isAlternateCut reports whether duration is within 10% of the feature's. A
+// feature with an unknown (zero or negative) duration cannot have alternate
+// cuts: without that guard every other title would satisfy the ratio check
+// and be misclassified as an alternate cut of a feature whose length was
+// never actually parsed.
 func isAlternateCut(duration, featureDuration int) bool {
+	if featureDuration <= 0 {
+		return false
+	}
 	return duration*alternateCutDenominator >= featureDuration*alternateCutNumerator
 }
 
