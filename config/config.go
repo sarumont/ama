@@ -222,6 +222,12 @@ func (c *Config) Validate() error {
 	if c.Disc.PollInterval < 1 {
 		fail("disc.poll_interval must be at least 1 second, got %d", c.Disc.PollInterval)
 	}
+	if c.Disc.Device == "" {
+		fail("disc.device is required")
+	}
+	if len(c.Subtitle.OCRLanguages) == 0 {
+		fail("subtitle.ocr_languages is required")
+	}
 
 	return errors.Join(errs...)
 }

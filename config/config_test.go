@@ -539,6 +539,16 @@ func TestValidate(t *testing.T) {
 			wantErr: []string{"subtitle.forced_ratio_threshold"},
 		},
 		{
+			name:    "empty disc device",
+			mutate:  func(c *Config) { c.Disc.Device = "" },
+			wantErr: []string{"disc.device"},
+		},
+		{
+			name:    "empty ocr languages",
+			mutate:  func(c *Config) { c.Subtitle.OCRLanguages = nil },
+			wantErr: []string{"subtitle.ocr_languages"},
+		},
+		{
 			name:    "empty output paths",
 			mutate:  func(c *Config) { c.Output = Output{} },
 			wantErr: []string{"output.movies", "output.music", "output.temp"},
