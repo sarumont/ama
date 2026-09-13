@@ -278,6 +278,31 @@ func TestAnalyzeSizeFallbackCancellationIsError(t *testing.T) {
 	}
 }
 
+func TestTaggedSizeDeterministicWithDuplicateTags(t *testing.T) {
+	tags := map[string]string{
+		"NUMBER_OF_BYTES":     "100",
+		"NUMBER_OF_BYTES-eng": "200",
+	}
+	for i := 0; i < 20; i++ {
+		n, ok := taggedSize(tags)
+		if !ok || n != 100 {
+			t.Fatalf("taggedSize = (%d, %v), want (100, true)", n, ok)
+		}
+	}
+}
+
+func TestLanguageDeterministicWithDuplicateTags(t *testing.T) {
+	tags := map[string]string{
+		"language": "eng",
+		"LANGUAGE": "spa",
+	}
+	for i := 0; i < 20; i++ {
+		if got := language(tags); got != "spa" {
+			t.Fatalf("language = %q, want %q", got, "spa")
+		}
+	}
+}
+
 func TestAnalyzeUnparsablePacketSizeIsWarning(t *testing.T) {
 	runner := &fakeRunner{
 		streamsOut: []byte(`{"streams": [{"index": 4, "codec_name": "subrip",

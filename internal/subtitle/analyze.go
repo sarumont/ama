@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -273,13 +274,16 @@ func (a *Analyzer) packetSize(ctx context.Context, mkvPath string, index int) (i
 
 // taggedSize reads the mkvmerge statistics tag, which ffprobe surfaces either
 // as NUMBER_OF_BYTES or, when the tag is language-qualified, as
-// NUMBER_OF_BYTES-eng. Tag case varies between ffprobe builds.
+// NUMBER_OF_BYTES-eng. Tag case varies between ffprobe builds. Keys are
+// visited in sorted order so that a file carrying more than one matching tag
+// (e.g. both NUMBER_OF_BYTES and NUMBER_OF_BYTES-eng) resolves the same way
+// on every run instead of depending on Go's randomized map iteration order.
 func taggedSize(tags map[string]string) (int64, bool) {
-	for k, v := range tags {
+	for _, k := range sortedTagKeys(tags) {
 		if !strings.HasPrefix(strings.ToLower(k), "number_of_bytes") {
 			continue
 		}
-		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		n, err := strconv.ParseInt(strings.TrimSpace(tags[k]), 10, 64)
 		if err != nil || n < 0 {
 			continue
 		}
@@ -289,16 +293,40 @@ func taggedSize(tags map[string]string) (int64, bool) {
 }
 
 // language reads the stream's language tag, falling back to "und" so a stream
-// with no tag is still recorded.
+// with no tag is still recorded. Keys are visited in sorted order for the
+// same reason as taggedSize: more than one matching key (e.g. "language" and
+// "LANGUAGE" both present) must resolve the same way on every run.
 func language(tags map[string]string) string {
-	for k, v := range tags {
+	for _, k := range sortedTagKeys(tags) {
 		if strings.EqualFold(k, "language") {
-			if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
+			if v := strings.ToLower(strings.TrimSpace(tags[k])); v != "" {
 				return v
 			}
 		}
 	}
 	return LanguageUndetermined
+}
+
+// sortedTagKeys returns tags' keys in a fixed order (case-insensitive) so
+// callers can look up ambiguous/duplicate tags deterministically instead of
+// relying on Go's randomized map iteration order.
+func sortedTagKeys(tags map[string]string) []string {
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		li, lj := strings.ToLower(keys[i]), strings.ToLower(keys[j])
+		if li != lj {
+			return li < lj
+		}
+		// Keys that differ only by case (e.g. "language" vs "LANGUAGE") tie
+		// under the case-insensitive comparison above; break the tie on the
+		// exact key so the order is still fixed rather than left to
+		// sort.Slice's unstable ordering of equal elements.
+		return keys[i] < keys[j]
+	})
+	return keys
 }
 
 // ffprobeOutput is the subset of `ffprobe -show_streams -print_format json`
