@@ -94,6 +94,9 @@ services:
       - "988"
     volumes:
       - /media/library:/media/library
+      - /media/library/.ama-tmp:/tmp/ama   # keep in-progress rips on the
+                                            # library filesystem, not the
+                                            # container's writable layer
       - ./ama.yaml:/config/ama.yaml
     environment:
       AMA_CONFIG: /config/ama.yaml
