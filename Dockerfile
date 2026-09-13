@@ -201,15 +201,15 @@ RUN ln -s /opt/pgsrip/bin/pgsrip /usr/local/bin/pgsrip
 COPY --from=go-builder /out/ama /usr/local/bin/ama
 
 # The container is started with `devices: - /dev/sr0:/dev/sr0`, and the device
-# node keeps the host's owning GID. That GID differs per distro, so ama joins
-# all of the common ones: cdrom (24, Debian/Ubuntu), optical (990, Arch) and
-# GID 11 (Fedora's cdrom). On any other host, override with `group_add:` in
-# compose.
+# node keeps the host's owning GID. `ama` joins the stable Debian/Ubuntu
+# `cdrom` GID (24) below. Every other distro (Arch's `optical`, Fedora's
+# `cdrom`, ...) allocates that GID dynamically per install, so no value baked
+# in at build time can be relied on — pass it at container-run-time instead
+# via `group_add:` in compose (see docs/CONFIG.md):
+#   group_add: ["<gid from `stat -c %g /dev/sr0` on the host>"]
 RUN set -eux; \
     groupadd -g 1000 ama; \
     useradd -u 1000 -g ama -G cdrom,video -m -d /home/ama -s /usr/sbin/nologin ama; \
-    groupadd -f -g 990 optical; usermod -aG optical ama; \
-    groupadd -f -g 11 cdrom-fedora; usermod -aG cdrom-fedora ama; \
     mkdir -p /config /media/library /tmp/ama; \
     chown -R ama:ama /config /media/library /tmp/ama
 

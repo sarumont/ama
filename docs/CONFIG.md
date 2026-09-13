@@ -86,6 +86,12 @@ services:
         MAKEMKV_ACCEPT_EULA: "yes"
     devices:
       - /dev/sr0:/dev/sr0
+    group_add:
+      # GID that owns /dev/sr0 on this host — run `stat -c %g /dev/sr0` to
+      # find it. The image only bakes in the stable Debian/Ubuntu `cdrom`
+      # GID (24); every other distro allocates this dynamically per install,
+      # so it must be supplied here rather than guessed at build time.
+      - "988"
     volumes:
       - /media/library:/media/library
       - ./ama.yaml:/config/ama.yaml
