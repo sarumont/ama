@@ -125,9 +125,17 @@ func New(apiKey string, httpClient *http.Client, baseURL string) *Client {
 	return &Client{baseURL: baseURL, apiKey: apiKey, http: httpClient}
 }
 
+// maxSearchPages bounds how many pages of /search/movie results Search will
+// fetch. TMDB returns up to 20 results per page; a generic disc label can
+// push the right movie past page 1, but fetching every page for a query with
+// thousands of results would be wasteful, so the fetch is capped rather than
+// exhaustive.
+const maxSearchPages = 5
+
 // searchResponse is the subset of /search/movie AMA reads.
 type searchResponse struct {
-	Results []struct {
+	TotalPages int `json:"total_pages"`
+	Results    []struct {
 		ID            int     `json:"id"`
 		Title         string  `json:"title"`
 		OriginalTitle string  `json:"original_title"`
@@ -141,30 +149,60 @@ type searchResponse struct {
 // Search queries TMDB for movies matching title. A non-zero year narrows the
 // search; zero omits the filter entirely.
 //
+// TMDB's year filter excludes any movie whose release year does not match
+// exactly, but the year disc metadata reports (a reissue date, a festival
+// date, the packaging date) is frequently not the film's TMDB release year.
+// So a year-filtered search that comes back empty is retried once without
+// the year filter, rather than reporting a false "no such movie".
+//
+// Results are collected across up to maxSearchPages pages of TMDB's paginated
+// response, so a match past the first 20 results can still be found.
+//
 // No match is not an error: the result is an empty slice.
 func (c *Client) Search(ctx context.Context, title string, year int) ([]Candidate, error) {
+	candidates, err := c.search(ctx, title, year)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 && year != 0 {
+		return c.search(ctx, title, 0)
+	}
+	return candidates, nil
+}
+
+// search performs one TMDB search across up to maxSearchPages pages, without
+// the year-filter fallback Search layers on top.
+func (c *Client) search(ctx context.Context, title string, year int) ([]Candidate, error) {
 	params := url.Values{}
 	params.Set("query", title)
 	if year != 0 {
 		params.Set("year", strconv.Itoa(year))
 	}
 
-	var body searchResponse
-	if err := c.get(ctx, "/search/movie", params, &body); err != nil {
-		return nil, err
-	}
+	var candidates []Candidate
+	for page := 1; page <= maxSearchPages; page++ {
+		params.Set("page", strconv.Itoa(page))
 
-	candidates := make([]Candidate, 0, len(body.Results))
-	for _, r := range body.Results {
-		candidates = append(candidates, Candidate{
-			TMDBID:        r.ID,
-			Title:         r.Title,
-			OriginalTitle: r.OriginalTitle,
-			Year:          releaseYear(r.ReleaseDate),
-			Overview:      r.Overview,
-			PosterPath:    r.PosterPath,
-			Popularity:    r.Popularity,
-		})
+		var body searchResponse
+		if err := c.get(ctx, "/search/movie", params, &body); err != nil {
+			return nil, err
+		}
+
+		for _, r := range body.Results {
+			candidates = append(candidates, Candidate{
+				TMDBID:        r.ID,
+				Title:         r.Title,
+				OriginalTitle: r.OriginalTitle,
+				Year:          releaseYear(r.ReleaseDate),
+				Overview:      r.Overview,
+				PosterPath:    r.PosterPath,
+				Popularity:    r.Popularity,
+			})
+		}
+
+		if body.TotalPages <= page {
+			break
+		}
 	}
 	return candidates, nil
 }
