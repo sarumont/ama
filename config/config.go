@@ -164,7 +164,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: reading %s: %w", resolved, err)
 	}
 
-	if err := applyEnv(cfg, os.LookupEnv); err != nil {
+	if err := applyEnv(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -322,12 +322,11 @@ func envBindings() []envBinding {
 	}
 }
 
-// applyEnv overlays environment variables onto cfg. lookup is injected so tests
-// do not have to mutate the process environment.
-func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
+// applyEnv overlays environment variables onto cfg.
+func applyEnv(cfg *Config) error {
 	for _, b := range envBindings() {
 		for _, name := range b.names() {
-			value, ok := lookup(name)
+			value, ok := os.LookupEnv(name)
 			if !ok {
 				continue
 			}
