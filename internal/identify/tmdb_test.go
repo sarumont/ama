@@ -38,7 +38,7 @@ func serveFixture(t *testing.T, status int, name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		w.Write(body)
+		_, _ = w.Write(body)
 	}
 }
 
@@ -48,7 +48,7 @@ func TestSearchReturnsCandidates(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		got = r
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(body)
+		_, _ = w.Write(body)
 	})
 
 	candidates, err := client.Search(context.Background(), "Iron Man 3", 2013)
@@ -106,7 +106,7 @@ func TestSearchOmitsZeroYear(t *testing.T) {
 	body := fixture(t, "search_movie_empty.json")
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		got = r
-		w.Write(body)
+		_, _ = w.Write(body)
 	})
 
 	if _, err := client.Search(context.Background(), "Solaris", 0); err != nil {
@@ -165,7 +165,7 @@ func TestSearchRateLimited(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "3")
 		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write(body)
+		_, _ = w.Write(body)
 	})
 
 	_, err := client.Search(context.Background(), "Iron Man 3", 0)
@@ -187,7 +187,7 @@ func TestSearchRateLimited(t *testing.T) {
 
 func TestSearchMalformedJSON(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"results": [{"id": `))
+		_, _ = w.Write([]byte(`{"results": [{"id": `))
 	})
 
 	candidates, err := client.Search(context.Background(), "Iron Man 3", 0)
@@ -229,7 +229,7 @@ func TestIMDBID(t *testing.T) {
 	body := fixture(t, "external_ids.json")
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		got = r
-		w.Write(body)
+		_, _ = w.Write(body)
 	})
 
 	id, err := client.IMDBID(context.Background(), 68721)
