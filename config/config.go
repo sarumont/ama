@@ -12,8 +12,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -150,7 +152,9 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(resolved)
 	switch {
 	case err == nil:
-		if err := yaml.Unmarshal(data, cfg); err != nil {
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("config: parsing %s: %w", resolved, err)
 		}
 	case errors.Is(err, os.ErrNotExist) && !explicit:

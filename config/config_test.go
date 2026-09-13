@@ -117,6 +117,11 @@ func TestLoadYAML(t *testing.T) {
 			yaml:    "web:\n\tport: nope\n",
 			wantErr: "parsing",
 		},
+		{
+			name:    "unknown key is an error",
+			yaml:    "subtitle:\n  forced_ratio: 0.05\n",
+			wantErr: "forced_ratio",
+		},
 	}
 
 	for _, tt := range tests {
