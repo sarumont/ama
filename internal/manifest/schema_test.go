@@ -207,6 +207,42 @@ func TestMarshalOmitsOtherVariant(t *testing.T) {
 	}
 }
 
+// TestMarshalEmptyTracks checks a fresh manifest (no tracks ripped yet, as at
+// pending_confirmation or ripping) marshals tracks as [] rather than null.
+func TestMarshalEmptyTracks(t *testing.T) {
+	m := New(DiscTypeBluRay, "/dev/sr0")
+	encoded, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	decoded := decodeAny(t, encoded).(map[string]any)
+	list, ok := decoded["tracks"].([]any)
+	if !ok || len(list) != 0 {
+		t.Errorf("tracks = %v, want []", decoded["tracks"])
+	}
+}
+
+// TestMarshalCDTrackWithoutNumber checks that a CD track built before its
+// Number is known (e.g. a placeholder row written before whipper reports the
+// TOC) still marshals with the CD shape, keeping Title and AccurateRip
+// instead of silently falling through to the Blu-ray shape.
+func TestMarshalCDTrackWithoutNumber(t *testing.T) {
+	cd := New(DiscTypeCD, "/dev/sr0")
+	cd.Tracks = []Track{{Title: "Where I Need to Be", DurationSeconds: 207}}
+
+	encoded, err := json.Marshal(cd)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	track := decodeAny(t, encoded).(map[string]any)["tracks"].([]any)[0].(map[string]any)
+	if track["title"] != "Where I Need to Be" {
+		t.Errorf("track title = %v, want %q", track["title"], "Where I Need to Be")
+	}
+	if _, ok := track["makemkv_index"]; ok {
+		t.Errorf("CD track carries Blu-ray key %q", "makemkv_index")
+	}
+}
+
 func TestMarshalEmptyWarningsAndErrors(t *testing.T) {
 	m := Manifest{}
 	encoded, err := json.Marshal(&m)
