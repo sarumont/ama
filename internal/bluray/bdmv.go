@@ -5,7 +5,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,6 +42,12 @@ type DiscInfo struct {
 	// SourceFile is the base name of the XML the values came from, e.g.
 	// "bdmt_eng.xml", recorded so a manifest can say where a title came from.
 	SourceFile string
+	// Warnings holds errors from any other XML files in the same directory
+	// that failed to parse. Non-nil only when at least one file parsed
+	// successfully (otherwise the failures are returned as an error instead);
+	// callers should log these so, e.g., a corrupt bdmt_eng.xml that lost out
+	// to bdmt_jpn.xml isn't silently swallowed.
+	Warnings []error
 }
 
 // ReadDiscInfo reads disc metadata from the Blu-ray mounted at root, where root
@@ -86,6 +91,7 @@ func ReadDiscInfo(root string) (*DiscInfo, error) {
 	if best == nil {
 		return nil, fmt.Errorf("%w in %s: %w", ErrNoMetadata, dir, errors.Join(parseErrs...))
 	}
+	best.Warnings = parseErrs
 	return best, nil
 }
 
@@ -111,10 +117,7 @@ func resolveChildDir(parent, name string) (string, error) {
 
 	entries, err := os.ReadDir(parent)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("%w: %s does not exist", ErrNoMetadata, filepath.Join(parent, name))
-		}
-		return "", fmt.Errorf("bluray: reading %s: %w", parent, err)
+		return "", fmt.Errorf("%w: reading %s: %w", ErrNoMetadata, parent, err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() && strings.EqualFold(entry.Name(), name) {
@@ -129,7 +132,7 @@ func resolveChildDir(parent, name string) (string, error) {
 func xmlFileNames(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("bluray: reading %s: %w", dir, err)
+		return nil, fmt.Errorf("%w: reading %s: %w", ErrNoMetadata, dir, err)
 	}
 	var names []string
 	for _, entry := range entries {
@@ -184,7 +187,12 @@ func parseDiscInfoFile(path string) (*DiscInfo, error) {
 		return nil, fmt.Errorf("bluray: parsing %s: %w", path, err)
 	}
 
-	title := strings.TrimSpace(doc.DiscInfo.Title.Name)
+	// strings.Fields splits on any whitespace (including newlines from a
+	// pretty-printed di:name) and drops empty runs, so this both trims and
+	// collapses internal whitespace to single spaces in one pass. Without it
+	// a wrapped name leaks a newline into Title, which defeats trailingYear
+	// below since "." does not match "\n".
+	title := strings.Join(strings.Fields(doc.DiscInfo.Title.Name), " ")
 	if title == "" {
 		return nil, fmt.Errorf("bluray: %s declares no disc title", path)
 	}
