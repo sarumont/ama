@@ -87,6 +87,7 @@ printf '%s\n' '# makemkvcon v1.17.9, recorded YYYY-MM-DD' makemkvcon -r info dis
 
 ```sh
 dir=internal/subtitle/testdata/ffprobe/iron-man-3-pgs
+mkv=/media/temp/EXAMPLE_FEATURE_t00.mkv   # the already-ripped MKV to probe
 mkdir -p "$dir"
 ffprobe -v quiet -print_format json -show_streams "$mkv" >"$dir/stdout" 2>"$dir/stderr"
 echo $? >"$dir/exitcode"
