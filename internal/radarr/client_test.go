@@ -251,17 +251,21 @@ func TestAddAlreadyExists(t *testing.T) {
 	tests := []struct {
 		name         string
 		lookupPath   string
+		lookupBody   string
 		resourcePath string
 		status       int
 		body         string
+		wantID       int
 		add          func(*testing.T, *fakeArr) (AddResult, error)
 	}{
 		{
 			name:         "radarr validation failure array",
 			lookupPath:   "/api/v3/movie/lookup",
+			lookupBody:   `[{"title":"Already Here","tmdbId":68721,"id":55}]`,
 			resourcePath: "/api/v3/movie",
 			status:       http.StatusBadRequest,
 			body:         `[{"propertyName":"TmdbId","errorMessage":"This movie has already been added","severity":"error"}]`,
+			wantID:       55,
 			add: func(t *testing.T, f *fakeArr) (AddResult, error) {
 				return NewRadarr(f.config(), f.client()).
 					AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/movies", QualityProfileID: 1})
@@ -270,6 +274,7 @@ func TestAddAlreadyExists(t *testing.T) {
 		{
 			name:         "sonarr validation failure array",
 			lookupPath:   "/api/v3/series/lookup",
+			lookupBody:   `[{"title":"Already Here","tvdbId":81189}]`,
 			resourcePath: "/api/v3/series",
 			status:       http.StatusBadRequest,
 			body:         `[{"propertyName":"TvdbId","errorMessage":"This series has already been added","severity":"error"}]`,
@@ -281,6 +286,7 @@ func TestAddAlreadyExists(t *testing.T) {
 		{
 			name:         "conflict with unwrapped message",
 			lookupPath:   "/api/v3/movie/lookup",
+			lookupBody:   `[{"title":"Already Here","tmdbId":68721}]`,
 			resourcePath: "/api/v3/movie",
 			status:       http.StatusConflict,
 			body:         `{"message":"Movie already exists"}`,
@@ -294,7 +300,7 @@ func TestAddAlreadyExists(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeArr(t, map[string]http.HandlerFunc{
-				tc.lookupPath:   writeJSON(`[{"title":"Already Here"}]`),
+				tc.lookupPath:   writeJSON(tc.lookupBody),
 				tc.resourcePath: writeStatus(tc.status, tc.body),
 			})
 
@@ -302,7 +308,7 @@ func TestAddAlreadyExists(t *testing.T) {
 			if err != nil {
 				t.Fatalf("add: want nil error for an existing item, got %v", err)
 			}
-			want := AddResult{AlreadyExists: true}
+			want := AddResult{ID: tc.wantID, AlreadyExists: true}
 			if got != want {
 				t.Errorf("result = %+v, want %+v", got, want)
 			}
@@ -313,7 +319,7 @@ func TestAddAlreadyExists(t *testing.T) {
 // A 400 that is not about a duplicate must still surface as an error.
 func TestAddOtherBadRequestIsAnError(t *testing.T) {
 	fake := newFakeArr(t, map[string]http.HandlerFunc{
-		"/api/v3/movie/lookup": writeJSON(`[{"title":"Broken"}]`),
+		"/api/v3/movie/lookup": writeJSON(`[{"title":"Broken","tmdbId":68721}]`),
 		"/api/v3/movie": writeStatus(http.StatusBadRequest,
 			`[{"propertyName":"RootFolderPath","errorMessage":"Folder does not exist","severity":"error"}]`),
 	})
@@ -499,6 +505,49 @@ func TestAddNoLookupMatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "tmdb id 68721") {
 		t.Errorf("error = %q, want it to name the tmdb id", err)
+	}
+}
+
+// If the service doesn't recognise the "tmdb:"/"tvdb:" prefix, the lookup
+// endpoint degrades to a free-text search and can return an unrelated match
+// instead of an empty list. The add must refuse to proceed rather than post
+// the wrong title.
+func TestAddLookupIDMismatchIsAnError(t *testing.T) {
+	fake := newFakeArr(t, map[string]http.HandlerFunc{
+		"/api/v3/qualityprofile": writeJSON(qualityProfiles),
+		"/api/v3/movie/lookup":   writeJSON(`[{"title":"Iron Man","tmdbId":1726}]`),
+	})
+
+	client := NewRadarr(fake.config(), fake.client())
+	_, err := client.AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/movies"})
+	if err == nil {
+		t.Fatal("want an error when the lookup returns a different tmdb id, got nil")
+	}
+	if !strings.Contains(err.Error(), "tmdb id 68721") {
+		t.Errorf("error = %q, want it to name the requested tmdb id", err)
+	}
+	if n := fake.requestCount("/api/v3/movie"); n != 0 {
+		t.Errorf("add requests = %d, want 0 when the lookup match is rejected", n)
+	}
+}
+
+// A 400 that merely quotes "already exists" in an unrelated field (here, a
+// path collision) must not be misread as a duplicate-add success.
+func TestAddPathCollisionIsNotAlreadyExists(t *testing.T) {
+	fake := newFakeArr(t, map[string]http.HandlerFunc{
+		"/api/v3/movie/lookup": writeJSON(`[{"title":"Iron Man 3","tmdbId":68721}]`),
+		"/api/v3/movie": writeStatus(http.StatusBadRequest,
+			`{"message":"InvalidPath","description":"Path /media/library/movies/Iron Man 3 (2013) already exists and is not empty"}`),
+	})
+
+	client := NewRadarr(fake.config(), fake.client())
+	_, err := client.AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/movies", QualityProfileID: 1})
+	if err == nil {
+		t.Fatal("want an error for a path collision, got nil (misreported as already-exists)")
+	}
+	var apiErr *Error
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("want *Error, got %T: %v", err, err)
 	}
 }
 

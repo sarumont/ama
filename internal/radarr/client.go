@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sarumont/ama/config"
 )
@@ -130,6 +131,8 @@ func (c *Radarr) AddMovie(ctx context.Context, tmdbID int, opts AddOptions) (Add
 		op:           "add movie",
 		lookupPath:   "/api/v3/movie/lookup",
 		term:         "tmdb:" + strconv.Itoa(tmdbID),
+		idField:      "tmdbId",
+		id:           tmdbID,
 		resourcePath: "/api/v3/movie",
 		subject:      fmt.Sprintf("tmdb id %d", tmdbID),
 		fields: map[string]any{
@@ -152,6 +155,8 @@ func (c *Sonarr) AddSeries(ctx context.Context, tvdbID int, opts AddOptions) (Ad
 		op:           "add series",
 		lookupPath:   "/api/v3/series/lookup",
 		term:         "tvdb:" + strconv.Itoa(tvdbID),
+		idField:      "tvdbId",
+		id:           tvdbID,
 		resourcePath: "/api/v3/series",
 		subject:      fmt.Sprintf("tvdb id %d", tvdbID),
 		fields: map[string]any{
@@ -197,9 +202,13 @@ func newArr(app string, cfg config.Arr, httpClient *http.Client) arr {
 // addSpec is the per-service half of an add: the endpoints, the lookup term,
 // and the fields that only one of the two services understands.
 type addSpec struct {
-	op           string
-	lookupPath   string
-	term         string
+	op         string
+	lookupPath string
+	term       string
+	// idField and id let add verify the lookup actually returned the requested
+	// item: "tmdbId" / a TMDB ID for Radarr, "tvdbId" / a TVDB ID for Sonarr.
+	idField      string
+	id           int
 	resourcePath string
 	subject      string
 	fields       map[string]any
@@ -236,6 +245,13 @@ func (a arr) add(ctx context.Context, spec addSpec, opts AddOptions) (AddResult,
 	}
 
 	resource := found[0]
+	// Both services fall back to a free-text search over spec.term when they
+	// don't recognise the "tmdb:"/"tvdb:" prefix, so found[0] can be a fuzzy
+	// match for an unrelated title rather than the requested item. Confirm the
+	// ID before trusting it.
+	if got, ok := resource[spec.idField].(float64); !ok || int(got) != spec.id {
+		return AddResult{}, fmt.Errorf("%s: %s: lookup for %s returned a different item (%v)", a.app, spec.op, spec.subject, resource["title"])
+	}
 	resource["rootFolderPath"] = opts.RootFolderPath
 	resource["qualityProfileId"] = profileID
 	resource["monitored"] = true
@@ -257,7 +273,11 @@ func (a arr) add(ctx context.Context, spec addSpec, opts AddOptions) (AddResult,
 		}
 		return AddResult{ID: added.ID, Added: true}, nil
 	case alreadyExists(status, body):
-		return AddResult{AlreadyExists: true}, nil
+		// Both lookup endpoints set id to the library ID when the item is
+		// already tracked, so the caller can record it and follow up with a
+		// targeted rescan instead of a blunt directory scan.
+		existing, _ := resource["id"].(float64)
+		return AddResult{ID: int(existing), AlreadyExists: true}, nil
 	default:
 		return AddResult{}, a.httpError(spec.op, status, body)
 	}
@@ -389,9 +409,20 @@ func alreadyExists(status int, body []byte) bool {
 		}
 		return false
 	}
-	// Not the documented array shape; fall back to the raw body so a
-	// differently-worded wrapper still gets recognised.
-	return mentionsExisting(string(body))
+
+	// Not the documented array shape; fall back to a single error object, but
+	// only test its message fields. Matching the whole raw body risks treating
+	// an unrelated failure — e.g. a 400 for a path collision whose description
+	// happens to say "already exists and is not empty" — as a duplicate, which
+	// turns a real failure into a false success.
+	var obj struct {
+		Message      string `json:"message"`
+		ErrorMessage string `json:"errorMessage"`
+	}
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return false
+	}
+	return mentionsExisting(obj.Message) || mentionsExisting(obj.ErrorMessage)
 }
 
 func mentionsExisting(msg string) bool {
@@ -404,7 +435,11 @@ func mentionsExisting(msg string) bool {
 func truncate(body []byte) string {
 	s := strings.TrimSpace(string(body))
 	if len(s) > maxErrorBody {
-		return s[:maxErrorBody] + "..."
+		cut := maxErrorBody
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		return s[:cut] + "..."
 	}
 	return s
 }
