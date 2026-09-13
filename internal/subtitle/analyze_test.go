@@ -259,6 +259,25 @@ func TestAnalyzeSizeFallbackFailureIsWarning(t *testing.T) {
 	}
 }
 
+func TestAnalyzeSizeFallbackCancellationIsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	runner := &fakeRunner{
+		streamsOut: []byte(`{"streams": [{"index": 4, "codec_name": "hdmv_pgs_subtitle",
+			"codec_type": "subtitle", "tags": {"language": "eng"}}]}`),
+		packetsErr: context.Canceled,
+	}
+
+	got, err := (&Analyzer{Runner: runner}).Analyze(ctx, "movie.mkv")
+	if err == nil {
+		t.Fatalf("expected an error from a cancelled context, got streams %+v", got)
+	}
+	if got != nil {
+		t.Errorf("expected nil streams on cancellation, got %+v", got)
+	}
+}
+
 func TestAnalyzeUnparsablePacketSizeIsWarning(t *testing.T) {
 	runner := &fakeRunner{
 		streamsOut: []byte(`{"streams": [{"index": 4, "codec_name": "subrip",
