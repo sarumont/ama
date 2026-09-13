@@ -21,7 +21,7 @@ fmt:
 	gofmt -s -w .
 
 fmt-check:
-	@files=$$(gofmt -s -l .); \
+	@files=$$(gofmt -s -l .) || exit 1; \
 	if [ -n "$$files" ]; then \
 		echo "not gofmt'd:"; echo "$$files"; \
 		exit 1; \
