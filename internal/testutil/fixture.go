@@ -13,8 +13,11 @@ import (
 	"testing"
 )
 
-// ExitError reports a fixture recorded with a non-zero exit status. It mirrors
-// exec.ExitError closely enough that production code can treat both alike.
+// ExitError reports a fixture recorded with a non-zero exit status. Classification
+// code should read the exit status through ExitCode(), the same method name
+// exec.ExitError promotes from os.ProcessState, rather than asserting to the
+// concrete *exec.ExitError type — this is a distinct type built from a
+// recording, not a real process result, so it cannot satisfy that assertion.
 type ExitError struct {
 	Code   int
 	Stderr []byte
@@ -22,6 +25,11 @@ type ExitError struct {
 
 func (e *ExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
+}
+
+// ExitCode reports the recorded exit status.
+func (e *ExitError) ExitCode() int {
+	return e.Code
 }
 
 // fixture is one recorded invocation.
@@ -82,15 +90,21 @@ func (r *FixtureRunner) Run(ctx context.Context, name string, args ...string) ([
 	return stdout, err
 }
 
-// RunCapture replays the recording, returning stdout and stderr separately.
-func (r *FixtureRunner) RunCapture(_ context.Context, name string, args ...string) (stdout, stderr []byte, err error) {
+// RunCapture replays the recording, returning stdout and stderr separately. A
+// cancelled or expired ctx is reported as its Err() rather than replayed, so
+// tests can exercise cancellation handling through this seam.
+func (r *FixtureRunner) RunCapture(ctx context.Context, name string, args ...string) (stdout, stderr []byte, err error) {
 	r.t.Helper()
+
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 
 	key := Key(name, args...)
 	f, ok := r.fixtures[key]
 	if !ok {
 		r.t.Fatalf("testutil: no fixture for %q\nrecorded invocations:\n  %s", key, strings.Join(r.keys(), "\n  "))
-		return nil, nil, nil
+		return nil, nil, fmt.Errorf("testutil: no fixture for %q", key)
 	}
 	if f.exitCode != 0 {
 		return f.stdout, f.stderr, &ExitError{Code: f.exitCode, Stderr: f.stderr}
@@ -172,6 +186,7 @@ func LoadFixture(t testing.TB, segments ...string) []byte {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("testutil: reading fixture %s: %v", path, err)
+		return nil
 	}
 	return data
 }
