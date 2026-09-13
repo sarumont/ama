@@ -332,6 +332,15 @@ func TestEnvOverrides(t *testing.T) {
 			env:     map[string]string{"AMA_RADARR_ENABLED": "yes-please"},
 			wantErr: "AMA_RADARR_ENABLED",
 		},
+		{
+			name: "empty override does not clobber the file value",
+			env:  map[string]string{"AMA_MAKEMKV_KEY": ""},
+			check: func(t *testing.T, c *Config) {
+				if c.MakeMKV.Key != "mk-license" {
+					t.Errorf("makemkv.key = %q, want the file value", c.MakeMKV.Key)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -330,6 +330,15 @@ func applyEnv(cfg *Config) error {
 			if !ok {
 				continue
 			}
+			// Compose interpolates an unset host variable to the empty
+			// string while still setting it, so an empty override is
+			// treated as "not configured" rather than clobbering a real
+			// file value. tmdb.auto_confirm_threshold is the documented
+			// exception: empty is how an operator explicitly clears it back
+			// to "unset".
+			if value == "" && !(b.section == "TMDB" && b.field == "AUTO_CONFIRM_THRESHOLD") {
+				continue
+			}
 			if err := b.apply(cfg, value); err != nil {
 				return fmt.Errorf("config: %s: %w", name, err)
 			}
