@@ -84,6 +84,7 @@ services:
       context: .
       args:
         MAKEMKV_ACCEPT_EULA: "yes"
+    init: true          # let Docker inject tini as PID 1 for signal/zombie handling
     devices:
       - /dev/sr0:/dev/sr0
     group_add:
