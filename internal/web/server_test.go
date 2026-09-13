@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,11 +134,27 @@ func TestStartShutsDownOnContextCancel(t *testing.T) {
 }
 
 func TestStartFailsOnBadBind(t *testing.T) {
+	// Hold a port so the server is guaranteed to fail binding it, rather than
+	// relying on binding a non-local address, which is not reliably rejected
+	// (e.g. with net.ipv4.ip_nonlocal_bind=1, or inside some network
+	// namespaces / CI runners).
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
 	srv := newTestServer(t)
-	srv.cfg.Web.Host = "203.0.113.1" // TEST-NET-3, not a local address
-	srv.cfg.Web.Port = 8080
+	srv.cfg.Web.Host = "127.0.0.1"
+	srv.cfg.Web.Port = ln.Addr().(*net.TCPAddr).Port
 
 	if err := srv.Start(context.Background()); err == nil {
 		t.Fatal("Start on unbindable address: want error, got nil")
+	}
+
+	select {
+	case <-srv.Ready():
+	default:
+		t.Error("Ready() not closed after failed bind")
 	}
 }
