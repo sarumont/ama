@@ -240,14 +240,27 @@ func apiError(resp *http.Response) error {
 	return err
 }
 
-// retryAfter parses the delay-seconds form of the Retry-After header. TMDB only
-// ever sends that form, so the HTTP-date form is not handled.
+// retryAfter parses the Retry-After header, which arrives as either
+// delay-seconds ("120") or an HTTP-date. TMDB itself only ever sends
+// delay-seconds, but the response passing through this client is whatever is
+// in front of TMDB — Cloudflare and other edges emit the HTTP-date form on
+// their own 429/503 pages — so both forms are handled.
 func retryAfter(header string) time.Duration {
-	seconds, err := strconv.Atoi(header)
-	if err != nil || seconds < 0 {
+	if header == "" {
 		return 0
 	}
-	return time.Duration(seconds) * time.Second
+	if seconds, err := strconv.Atoi(header); err == nil {
+		if seconds < 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(header); err == nil {
+		if d := time.Until(when); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 // releaseYear extracts the year from a TMDB release_date ("YYYY-MM-DD").
