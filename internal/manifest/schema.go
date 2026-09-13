@@ -25,8 +25,10 @@
 //
 // Track is the one place where those two rules collide: edition must be emitted
 // as null on a Blu-ray track but must not appear at all on a CD track. Track
-// therefore carries the union of both field sets and has a MarshalJSON that
-// emits the documented shape for its variant. See Track.MarshalJSON.
+// therefore carries the union of both field sets; Manifest.MarshalJSON emits
+// the documented shape for each track using Disc.Type, the same discriminator
+// as everything else, since a Track cannot see its parent Manifest. See
+// marshalTracks.
 package manifest
 
 import (
@@ -131,11 +133,25 @@ func New(discType DiscType, device string) *Manifest {
 	}
 }
 
-// MarshalJSON emits warnings and errors as [] rather than null when they are
-// unset, so consumers can index them without a nil check.
+// MarshalJSON emits warnings, errors and tracks as [] rather than null when
+// they are unset, so consumers can index them without a nil check. It also
+// renders each track using the variant that matches Disc.Type rather than
+// guessing from Track.Number; see marshalTracks.
 func (m Manifest) MarshalJSON() ([]byte, error) {
 	type alias Manifest
-	out := alias(m)
+
+	tracks, err := marshalTracks(m.Disc.Type, m.Tracks)
+	if err != nil {
+		return nil, err
+	}
+
+	out := struct {
+		alias
+		Tracks []json.RawMessage `json:"tracks"`
+	}{
+		alias:  alias(m),
+		Tracks: tracks,
+	}
 	if out.Warnings == nil {
 		out.Warnings = []string{}
 	}
@@ -143,6 +159,51 @@ func (m Manifest) MarshalJSON() ([]byte, error) {
 		out.Errors = []string{}
 	}
 	return json.Marshal(out)
+}
+
+// marshalTracks renders each track as the documented shape for discType, the
+// same discriminator the rest of the package uses (see the package doc). A
+// Track cannot see its parent Manifest, so Manifest.MarshalJSON resolves the
+// variant here rather than guessing per-track from Track.Number — a guess
+// that fails open toward Blu-ray and silently drops CD-only fields like Title
+// when Number happens to be unset (e.g. a placeholder row written before
+// whipper reports the TOC).
+func marshalTracks(discType DiscType, tracks []Track) ([]json.RawMessage, error) {
+	out := make([]json.RawMessage, len(tracks))
+	for i, t := range tracks {
+		var v any
+		if discType == DiscTypeCD {
+			number := 0
+			if t.Number != nil {
+				number = *t.Number
+			}
+			v = cdTrack{
+				Number:          number,
+				Title:           t.Title,
+				DurationSeconds: t.DurationSeconds,
+				AccurateRip:     t.AccurateRip,
+				OutputFile:      t.OutputFile,
+			}
+		} else {
+			v = bdTrack{
+				MakeMKVIndex:    t.MakeMKVIndex,
+				DurationSeconds: t.DurationSeconds,
+				SizeBytes:       t.SizeBytes,
+				AudioTrackCount: t.AudioTrackCount,
+				ChapterCount:    t.ChapterCount,
+				Role:            t.Role,
+				RoleReason:      t.RoleReason,
+				OutputFile:      t.OutputFile,
+				Edition:         t.Edition,
+			}
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = b
+	}
+	return out, nil
 }
 
 // Disc describes the physical disc.
@@ -191,7 +252,7 @@ type Candidate struct {
 }
 
 // Track is one ripped Blu-ray title or one ripped CD audio track. It holds the
-// union of both field sets; see MarshalJSON for how the variant is chosen.
+// union of both field sets; see marshalTracks for how the variant is chosen.
 type Track struct {
 	// Blu-ray fields. MakeMKVIndex, SizeBytes, AudioTrackCount and
 	// ChapterCount are pointers because zero is a meaningful value for them
@@ -212,34 +273,6 @@ type Track struct {
 	// Shared fields.
 	DurationSeconds int    `json:"duration_seconds"`
 	OutputFile      string `json:"output_file"`
-}
-
-// MarshalJSON writes the Blu-ray track shape or the CD track shape depending on
-// the variant: a track with Number set is a CD track, anything else is a
-// Blu-ray title. Emitting the exact documented shape is why this exists —
-// omitempty alone cannot both keep "edition": null on a Blu-ray track and drop
-// the key entirely from a CD track.
-func (t Track) MarshalJSON() ([]byte, error) {
-	if t.Number != nil {
-		return json.Marshal(cdTrack{
-			Number:          *t.Number,
-			Title:           t.Title,
-			DurationSeconds: t.DurationSeconds,
-			AccurateRip:     t.AccurateRip,
-			OutputFile:      t.OutputFile,
-		})
-	}
-	return json.Marshal(bdTrack{
-		MakeMKVIndex:    t.MakeMKVIndex,
-		DurationSeconds: t.DurationSeconds,
-		SizeBytes:       t.SizeBytes,
-		AudioTrackCount: t.AudioTrackCount,
-		ChapterCount:    t.ChapterCount,
-		Role:            t.Role,
-		RoleReason:      t.RoleReason,
-		OutputFile:      t.OutputFile,
-		Edition:         t.Edition,
-	})
 }
 
 // bdTrack is the marshaling shape of a Blu-ray title.
