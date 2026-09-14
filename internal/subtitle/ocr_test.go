@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // fakeOCRRunner stands in for ffmpeg and pgsrip: it creates the files the real
@@ -587,3 +588,17 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
+// TestTruncateBacksOffToRuneBoundary guards the LOW finding: truncate cut at
+// a fixed byte offset, which can split a multi-byte UTF-8 rune and produce an
+// invalid string once it's later JSON-marshalled into the sidecar.
+func TestTruncateBacksOffToRuneBoundary(t *testing.T) {
+	// "é" is the 2-byte UTF-8 sequence 0xC3 0xA9; placed at byte offset 9 so
+	// a naive cut at n=10 lands on its second byte.
+	s := strings.Repeat("x", 9) + "é" + strings.Repeat("x", 10)
+	for n := 5; n <= 12; n++ {
+		got := truncate(s, n)
+		if !utf8.ValidString(got) {
+			t.Errorf("truncate(s, %d) = %q: invalid UTF-8", n, got)
+		}
+	}
+}

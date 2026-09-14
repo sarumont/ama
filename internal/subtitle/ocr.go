@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // BundledLanguages are the tesseract language packs baked into the container
@@ -340,10 +341,17 @@ func scratchName(mkvPath string, streamIndex int, lang string) string {
 	return scratchBase(mkvPath, streamIndex) + "." + lang
 }
 
-// truncate shortens s to at most n bytes, marking that it was cut.
+// truncate shortens s to at most n bytes, marking that it was cut. It backs
+// off to a UTF-8 rune boundary first: s is subprocess stderr and regularly
+// carries non-ASCII (an accented disc title, a tesseract message), and this
+// string is later JSON-marshalled into the sidecar, so cutting mid-rune would
+// persist an invalid UTF-8 sequence.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + "… (truncated)"
 }
