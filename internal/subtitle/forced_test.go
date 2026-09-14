@@ -217,15 +217,31 @@ func TestDetectForcedCandidates(t *testing.T) {
 			want:      map[int]want{7: {}, 12: {}},
 		},
 		{
-			// The source already names its forced track, so the heuristic must
-			// not add a conflicting second candidate elsewhere.
-			name: "source forced flag on another track suppresses the candidate",
+			// A source flag on the full track is a mis-tag propagated by the
+			// ripping tool, not a competing verdict, so it must not suppress
+			// the heuristic's own pick.
+			name: "source forced flag on the full track does not suppress the candidate",
 			streams: []SubtitleStream{
 				pgs(7, 2_100_000),
 				func() SubtitleStream { s := pgs(12, 33_000_000); s.ForcedFlagInSource = true; return s }(),
 			},
 			threshold: 0.25,
-			want:      map[int]want{7: {}, 12: {}},
+			want: map[int]want{
+				7:  {candidate: true, reason: "size ratio 0.06 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
+				12: {pairedIdx: idx(7)},
+			},
+		},
+		{
+			// The source already names a different plausible forced track,
+			// so the heuristic must not add a conflicting second candidate.
+			name: "source forced flag on another plausible track suppresses the candidate",
+			streams: []SubtitleStream{
+				pgs(7, 900_000),
+				func() SubtitleStream { s := pgs(9, 2_100_000); s.ForcedFlagInSource = true; return s }(),
+				pgs(12, 33_000_000),
+			},
+			threshold: 0.25,
+			want:      map[int]want{7: {}, 9: {}, 12: {}},
 		},
 		{
 			// A source flag on the stream the heuristic picked agrees with it.

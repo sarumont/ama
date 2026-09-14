@@ -52,10 +52,12 @@ const LanguageEnglish = "eng"
 //     determine a size — is never flagged and is never used as the reference,
 //     which also keeps the ratio from dividing by zero.
 //
-//   - If some *other* eng PGS stream already carries ForcedFlagInSource, the
-//     source has already named its forced track and nothing is flagged, so the
-//     heuristic cannot contradict it. A source flag on the stream the heuristic
-//     picked agrees with it, and is flagged normally.
+//   - If some *other plausible* eng PGS stream already carries
+//     ForcedFlagInSource, the source has already named its forced track and
+//     nothing is flagged, so the heuristic cannot contradict it. The full
+//     track is excluded from this check: a source flag propagated onto the
+//     full track is a mis-tag, not a competing verdict. A source flag on the
+//     stream the heuristic picked agrees with it, and is flagged normally.
 func DetectForcedCandidates(streams []SubtitleStream, ratioThreshold float64) []SubtitleStream {
 	if ratioThreshold <= 0 {
 		ratioThreshold = DefaultForcedRatioThreshold
@@ -109,9 +111,10 @@ func DetectForcedCandidates(streams []SubtitleStream, ratioThreshold float64) []
 		return streams
 	}
 
-	// Defer to the source when it flags a different track as forced.
+	// Defer to the source when it flags a different *plausible* track as
+	// forced. A flag on the full track is a mis-tag, not a competing verdict.
 	for _, i := range eng {
-		if i != forced && streams[i].ForcedFlagInSource {
+		if i != forced && i != full && streams[i].ForcedFlagInSource {
 			return streams
 		}
 	}
