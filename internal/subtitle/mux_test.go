@@ -243,6 +243,21 @@ func TestMuxUndeterminedLanguage(t *testing.T) {
 	}
 }
 
+func TestMuxInvalidLanguageFallsBackToUndetermined(t *testing.T) {
+	mkvPath, srts := muxFixture(t, "junk.srt")
+	runner := &fakeMuxRunner{}
+	sourceStreams := []SubtitleStream{{StreamIndex: 3}}
+	// A junk language tag must not fail the whole mux; it degrades to "und".
+	results := []ConversionResult{{StreamIndex: 3, Language: "not-a-real-code!!", SRTPath: srts[0], Converted: true}}
+
+	if _, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, sourceStreams, results); err != nil {
+		t.Fatalf("Mux: %v", err)
+	}
+	if !hasOption(runner.calls[0], "--language", "0:und") {
+		t.Errorf("junk language tag: want --language 0:und, got %v", runner.calls[0])
+	}
+}
+
 func TestMuxSkippedWhenNothingConverted(t *testing.T) {
 	msg := "pgsrip: exit status 1"
 	cases := map[string][]ConversionResult{
@@ -385,6 +400,81 @@ func TestMuxCapsDefaultAtOneTrack(t *testing.T) {
 			t.Errorf("%s track should still be forced: %v", name, opts)
 		}
 	}
+}
+
+// TestMuxRefusesAlreadyProcessedInput covers the "outPath == mkvPath" guard's
+// real hazard: muxing a path that already carries ProcessedSuffix (e.g. a
+// retry that fed Mux's own output back in) would otherwise silently produce
+// "movie.processed.processed.mkv" instead of failing loudly.
+func TestMuxRefusesAlreadyProcessedInput(t *testing.T) {
+	libDir := t.TempDir()
+	mkvPath := filepath.Join(libDir, "Iron Man 3 (2013).processed.mkv")
+	if err := os.WriteFile(mkvPath, []byte("already processed"), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	runner := &fakeMuxRunner{}
+	results := []ConversionResult{{StreamIndex: 7, Language: "eng", SRTPath: "unused.srt", Converted: true}}
+
+	_, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, nil, results)
+	if err == nil {
+		t.Fatal("Mux succeeded on an already-processed input, want error")
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("mkvmerge ran on an already-processed input: %v", runner.calls)
+	}
+}
+
+// TestMuxEmptyOutputFails covers mkvmerge exiting success (or the exit-1
+// warning path) without actually writing anything to the pre-created temp
+// file: that must not be promoted into the library as a 0-byte
+// .processed.mkv.
+func TestMuxEmptyOutputFails(t *testing.T) {
+	mkvPath, srts := muxFixture(t, "forced.srt")
+	runner := &emptyOutputMuxRunner{}
+	sourceStreams := []SubtitleStream{{StreamIndex: 7}}
+	results := []ConversionResult{
+		{StreamIndex: 7, Language: "eng", SRTPath: srts[0], Converted: true, Forced: true, Default: true},
+	}
+
+	out, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, sourceStreams, results)
+	if err == nil {
+		t.Fatal("Mux succeeded on empty mkvmerge output, want error")
+	}
+	if out != "" {
+		t.Errorf("got output path %q on empty output, want none", out)
+	}
+	assertOnlyFiles(t, filepath.Dir(mkvPath), "Iron Man 3 (2013).mkv")
+}
+
+// emptyOutputMuxRunner simulates mkvmerge exiting 0 without writing anything
+// to the pre-created -o temp file, leaving it at its original zero length.
+type emptyOutputMuxRunner struct{}
+
+func (emptyOutputMuxRunner) Run(_ context.Context, _ string, _ ...string) ([]byte, error) {
+	return nil, nil
+}
+
+// TestMuxSweepsStaleTempFile covers a temp file orphaned by a previous mux of
+// the same output that was killed before it could clean up (SIGKILL, OOM,
+// power loss): it must not accumulate forever, and must not be mistaken for
+// this run's own output.
+func TestMuxSweepsStaleTempFile(t *testing.T) {
+	mkvPath, srts := muxFixture(t, "forced.srt")
+	stale := filepath.Join(filepath.Dir(mkvPath), ".Iron Man 3 (2013).processed.mkv.tmpSTALE123")
+	if err := os.WriteFile(stale, []byte("leftover from a killed mux"), 0o600); err != nil {
+		t.Fatalf("writing stale temp fixture: %v", err)
+	}
+
+	runner := &fakeMuxRunner{}
+	sourceStreams := []SubtitleStream{{StreamIndex: 7}}
+	results := []ConversionResult{
+		{StreamIndex: 7, Language: "eng", SRTPath: srts[0], Converted: true, Forced: true, Default: true},
+	}
+
+	if _, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, sourceStreams, results); err != nil {
+		t.Fatalf("Mux: %v", err)
+	}
+	assertOnlyFiles(t, filepath.Dir(mkvPath), "Iron Man 3 (2013).mkv", "Iron Man 3 (2013).processed.mkv")
 }
 
 func TestProcessedPath(t *testing.T) {

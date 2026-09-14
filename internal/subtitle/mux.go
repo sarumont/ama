@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -97,11 +98,12 @@ func (m *Muxer) Mux(ctx context.Context, mkvPath string, sourceStreams []Subtitl
 		return "", nil
 	}
 
-	outPath := ProcessedPath(mkvPath)
-	if outPath == mkvPath {
-		return "", fmt.Errorf("subtitle: refusing to mux %s onto itself", mkvPath)
+	if strings.HasSuffix(mkvPath, ProcessedSuffix) {
+		return "", fmt.Errorf("subtitle: refusing to mux already-processed file %s", mkvPath)
 	}
+	outPath := ProcessedPath(mkvPath)
 
+	sweepStaleTemp(m.logger(), outPath)
 	tmpPath, err := reserveOutput(outPath)
 	if err != nil {
 		return "", err
@@ -123,6 +125,16 @@ func (m *Muxer) Mux(ctx context.Context, mkvPath string, sourceStreams []Subtitl
 		}
 		m.logger().Warn("subtitle: mkvmerge finished with warnings",
 			"file", mkvPath, "error", err)
+	}
+
+	// reserveOutput pre-creates tmpPath, so its existence alone proves nothing:
+	// confirm mkvmerge actually wrote to it before promoting it into the library.
+	if info, err := os.Stat(tmpPath); err != nil {
+		cleanup()
+		return "", fmt.Errorf("subtitle: checking mux output %s: %w", tmpPath, err)
+	} else if info.Size() == 0 {
+		cleanup()
+		return "", fmt.Errorf("subtitle: mkvmerge produced no output for %s", mkvPath)
 	}
 
 	// The temp file is created with the mode of a private scratch file; the
@@ -208,10 +220,20 @@ func subtitleArgs(converted []ConversionResult) []string {
 	return args
 }
 
+// languageTagPattern is a loose shape check for the ISO 639-2 / BCP 47 codes
+// mkvmerge accepts for --language: a 2-3 letter base code, optionally followed
+// by one or more "-" separated subtags. It is intentionally permissive — it
+// exists only to catch tags mkvmerge would flatly reject, not to validate
+// against the real registry.
+var languageTagPattern = regexp.MustCompile(`^[a-z]{2,3}(-[a-z0-9]+)+$|^[a-z]{2,3}$`)
+
 // muxLanguage returns the language tag to set on a muxed track, falling back to
-// "und" so an untagged source stream still produces a valid track.
+// "und" for an untagged source stream or a tag mkvmerge would reject outright.
+// A single mislabelled stream then costs one mislabelled track instead of
+// failing the whole mux: mkvmerge exits 2 on an unrecognized --language value,
+// which would otherwise lose every OCRed track over one bad tag.
 func muxLanguage(lang string) string {
-	if lang = strings.ToLower(strings.TrimSpace(lang)); lang != "" {
+	if lang = strings.ToLower(strings.TrimSpace(lang)); lang != "" && languageTagPattern.MatchString(lang) {
 		return lang
 	}
 	return LanguageUndetermined
@@ -223,6 +245,29 @@ func mkvBool(b bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+// sweepStaleTemp removes any leftover reserveOutput temp file beside outPath
+// from a previous mux of the same file that never got to clean up after
+// itself — a SIGKILL, OOM kill, or power loss mid-mux leaves one behind, since
+// cleanup only runs on paths where this process is still alive. It is
+// best-effort: a removal failure is logged and otherwise ignored, since a
+// leftover temp file does not block the mux about to run.
+func sweepStaleTemp(log *slog.Logger, outPath string) {
+	dir := filepath.Dir(outPath)
+	matches, err := filepath.Glob(filepath.Join(dir, "."+filepath.Base(outPath)+".tmp*"))
+	if err != nil {
+		return
+	}
+	for _, stale := range matches {
+		if err := os.Remove(stale); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Warn("subtitle: could not remove orphaned mux temp file",
+				"file", stale, "error", err)
+		} else if err == nil {
+			log.Warn("subtitle: removed orphaned mux temp file from a previous interrupted run",
+				"file", stale)
+		}
+	}
 }
 
 // reserveOutput creates the temp file mkvmerge writes to, in the same directory
