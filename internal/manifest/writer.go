@@ -58,9 +58,17 @@ const (
 // one small entry per rip and is not worth the complexity of reference counting.
 var locks sync.Map
 
-// lockFor returns the mutex guarding path, creating it on first use.
+// lockFor returns the mutex guarding path, creating it on first use. The key
+// is the absolute path rather than just the cleaned one: filepath.Clean is
+// purely lexical, so a relative and an absolute spelling of the same file —
+// or two paths that reach it through a symlinked root — would otherwise land
+// on different mutexes and silently defeat Update's lost-update guarantee.
 func lockFor(path string) *sync.Mutex {
-	mu, _ := locks.LoadOrStore(filepath.Clean(path), &sync.Mutex{})
+	key, err := filepath.Abs(path)
+	if err != nil {
+		key = filepath.Clean(path)
+	}
+	mu, _ := locks.LoadOrStore(key, &sync.Mutex{})
 	return mu.(*sync.Mutex)
 }
 
@@ -274,11 +282,11 @@ func name(m *Manifest) string {
 		if album := sanitize(m.Identification.Album); album != "" {
 			return album
 		}
-		return m.ID
+		return fallbackID(m)
 	}
 	title := sanitize(m.Identification.Title)
 	if title == "" {
-		return m.ID
+		return fallbackID(m)
 	}
 	if m.Identification.Year > 0 {
 		return fmt.Sprintf("%s (%d)", title, m.Identification.Year)
@@ -286,10 +294,31 @@ func name(m *Manifest) string {
 	return title
 }
 
-// sanitize makes a title safe as a single path element. A separator is the only
-// character that would silently change what the path means — "Face/Off" would
-// otherwise become a directory named "Face" — so it is the only one replaced;
-// everything else is left as the metadata source spelled it.
+// fallbackID returns m.ID, generating and storing a fresh UUID first if it is
+// empty. m.ID is only guaranteed non-empty for a manifest built by New; one
+// built directly, or read back from a document with no "id" key, has
+// ID == "". Falling back to an empty string would defeat the point of this
+// fallback — Dir and Path would then resolve to the library root itself, and
+// every such manifest would collide on the same hidden ".manifest.json"
+// there — so a missing ID is filled in on first use instead.
+func fallbackID(m *Manifest) string {
+	if m.ID == "" {
+		m.ID = newUUID()
+	}
+	return m.ID
+}
+
+// sanitize makes a title safe as a single path element. A separator is the
+// only character that would silently change what the path means by itself —
+// "Face/Off" would otherwise become a directory named "Face" — so it is the
+// only one replaced; everything else is left as the metadata source spelled
+// it. "." and ".." are rejected outright instead: filepath.Join cleans them
+// away rather than preserving them, so a title of ".." would otherwise walk
+// the rip directory one level above the library root.
 func sanitize(s string) string {
-	return strings.TrimSpace(strings.ReplaceAll(s, "/", "-"))
+	s = strings.TrimSpace(strings.ReplaceAll(s, "/", "-"))
+	if s == "." || s == ".." {
+		return ""
+	}
+	return s
 }
