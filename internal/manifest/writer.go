@@ -20,7 +20,12 @@ package manifest
 // *arr clients — must keep: a mutator passed to Update may set a field that is
 // still unset, refine one it owns, and append to Warnings and Errors, but must
 // never clear a field another step already populated or truncate those two
-// slices. AddWarning and AddError are the only supported way to grow them.
+// slices. Call the Manifest.AddWarning/Manifest.AddError methods on the
+// manifest fn is given to grow them — never the package-level AddWarning,
+// AddError, SetStatus, Update or Write for the same path, all of which take
+// the lock Update is already holding and will deadlock the goroutine (and,
+// since the lock is never released, every later Update or Write on that path
+// too).
 //
 // # One writer, one disc at a time
 //
@@ -138,7 +143,11 @@ func Read(path string) (*Manifest, error) {
 // all happen under one lock. If fn returns an error the manifest is left exactly
 // as it was.
 //
-// fn must respect the append-only convention described at the top of this file.
+// fn must respect the append-only convention described at the top of this file,
+// using the Manifest.AddWarning/Manifest.AddError methods to grow Warnings and
+// Errors. fn must not call the package-level AddWarning, AddError, SetStatus,
+// Update or Write for path — those take the same lock Update is already
+// holding for the duration of fn and will deadlock the goroutine.
 func Update(path string, fn func(*Manifest) error) error {
 	mu := lockFor(path)
 	mu.Lock()
@@ -166,26 +175,52 @@ func SetStatus(path string, status Status) error {
 	})
 }
 
-// AddWarning appends a non-fatal note to the manifest. The rip continues and the
-// status is left alone.
+// AddWarning appends a non-fatal note to the manifest at path as its own
+// Update. The rip continues and the status is left alone.
+//
+// Call this from top-level rip/handler code only. A mutator already running
+// inside an Update for path must call the Manifest.AddWarning method on the
+// manifest it was given instead — this function takes the same per-path lock
+// Update holds and would deadlock.
 func AddWarning(path, warning string) error {
 	return Update(path, func(m *Manifest) error {
-		m.Warnings = append(m.Warnings, warning)
+		m.AddWarning(warning)
 		return nil
 	})
 }
 
-// AddError appends a failure and moves the manifest to StatusError, because
-// docs/MANIFEST.md defines that status as "one or more errors; see errors
-// array" — the two always travel together. Recoverable problems belong in
-// AddWarning, and a per-subtitle OCR failure belongs in that subtitle's
-// ConversionError field.
+// AddWarning appends a non-fatal note to m. Unlike the package-level
+// AddWarning, this does not read, lock or write anything — it is the form to
+// call from within a mutator passed to Update, on the manifest that mutator
+// was given.
+func (m *Manifest) AddWarning(warning string) {
+	m.Warnings = append(m.Warnings, warning)
+}
+
+// AddError appends a failure to the manifest at path and moves it to
+// StatusError, as its own Update, because docs/MANIFEST.md defines that
+// status as "one or more errors; see errors array" — the two always travel
+// together. Recoverable problems belong in AddWarning, and a per-subtitle OCR
+// failure belongs in that subtitle's ConversionError field.
+//
+// Call this from top-level rip/handler code only. A mutator already running
+// inside an Update for path must call the Manifest.AddError method on the
+// manifest it was given instead — this function takes the same per-path lock
+// Update holds and would deadlock.
 func AddError(path, message string) error {
 	return Update(path, func(m *Manifest) error {
-		m.Errors = append(m.Errors, message)
-		m.Status = StatusError
+		m.AddError(message)
 		return nil
 	})
+}
+
+// AddError appends a failure to m and moves it to StatusError. Unlike the
+// package-level AddError, this does not read, lock or write anything — it is
+// the form to call from within a mutator passed to Update, on the manifest
+// that mutator was given.
+func (m *Manifest) AddError(message string) {
+	m.Errors = append(m.Errors, message)
+	m.Status = StatusError
 }
 
 // Path returns where m's manifest belongs under the library root: the rip

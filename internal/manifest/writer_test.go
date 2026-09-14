@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestWriteReadRoundTrip is the core guarantee: a manifest that goes through
@@ -327,6 +328,63 @@ func TestSetStatusAndAppendHelpers(t *testing.T) {
 	}
 	if len(m.Warnings) != 1 {
 		t.Errorf("Warnings = %v, want the earlier warning to survive", m.Warnings)
+	}
+}
+
+// TestUpdateMutatorCanAppendWarningsAndErrors is a regression test for a
+// deadlock: Update holds a non-reentrant mutex across fn, so a mutator that
+// called the package-level AddWarning/AddError for the same path (the
+// pattern the package doc used to read as endorsing) would block forever
+// waiting for a lock its own goroutine already held. Manifest.AddWarning and
+// Manifest.AddError exist precisely so a mutator never needs to re-enter the
+// lock. This runs the mutator on its own goroutine and fails fast on a
+// timeout instead of hanging the whole test run if that guarantee regresses.
+func TestUpdateMutatorCanAppendWarningsAndErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rip.manifest.json")
+	if err := Write(path, New(DiscTypeBluRay, "/dev/sr0")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Update(path, func(m *Manifest) error {
+			m.AddWarning("two titles within 10% of the feature duration")
+			m.AddError("makemkvcon exited 1")
+			m.Status = StatusAnalyzing
+			return nil
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Update deadlocked: mutator's Manifest.AddWarning/AddError re-entered the per-path lock")
+	}
+
+	m, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(m.Warnings) != 1 || m.Warnings[0] != "two titles within 10% of the feature duration" {
+		t.Errorf("Warnings = %v", m.Warnings)
+	}
+	if len(m.Errors) != 1 || m.Errors[0] != "makemkvcon exited 1" {
+		t.Errorf("Errors = %v", m.Errors)
+	}
+	// The mutator's own explicit status assignment runs after AddError's
+	// status side effect, so it wins — same last-write-wins rule as any other
+	// field the mutator sets.
+	if m.Status != StatusAnalyzing {
+		t.Errorf("Status = %q, want %q", m.Status, StatusAnalyzing)
+	}
+
+	// A second Update after the first returns proves the lock was actually
+	// released rather than merely not blocking this call.
+	if err := SetStatus(path, StatusComplete); err != nil {
+		t.Fatalf("SetStatus after mutator: %v", err)
 	}
 }
 
