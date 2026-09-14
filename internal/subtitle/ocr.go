@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -135,9 +136,13 @@ func (c *Converter) CheckTools() error {
 // are still converted. Convert itself only errors when nothing could be
 // attempted (unusable temp dir) or when ctx is cancelled.
 //
-// mkvPath is only ever read. Each .sup is removed as soon as its OCR finishes,
-// as is the .srt of a failed conversion; the SRTs of successful conversions are
-// left in TempDir for the muxing stage, which owns their cleanup.
+// mkvPath is only ever read. Its full path (not just its basename) is folded
+// into every scratch filename (see scratchBase), so concurrent Convert calls
+// — e.g. two optical drives ripping in parallel, whose MakeMKV output is
+// identically named — can never collide in the shared TempDir. Each .sup is
+// removed as soon as its OCR finishes, as is the .srt of a failed conversion;
+// the SRTs of successful conversions are left in TempDir for the muxing
+// stage, which owns their cleanup.
 func (c *Converter) Convert(ctx context.Context, mkvPath string, streams []SubtitleStream) ([]ConversionResult, error) {
 	var results []ConversionResult
 
@@ -194,12 +199,14 @@ func (c *Converter) Convert(ctx context.Context, mkvPath string, streams []Subti
 	return results, nil
 }
 
-// convertStream extracts one stream to .sup, OCRs it to .srt, and returns the
-// SRT path. The .sup is always removed; on failure any partial .srt is too.
+// convertStream extracts one stream to a raw .sup, then OCRs it once per
+// candidate language (see languagesFor), stopping at the first that produces
+// a usable SRT. The raw extraction is shared across attempts since the PGS
+// bytes themselves don't depend on language; only the per-attempt copy's
+// filename does (see scratchName for why).
 func (c *Converter) convertStream(ctx context.Context, mkvPath, dir string, s SubtitleStream) (string, error) {
-	base := filepath.Join(dir, scratchName(mkvPath, s.StreamIndex))
-	supPath, srtPath := base+".sup", base+".srt"
-	defer os.Remove(supPath)
+	rawSup := filepath.Join(dir, scratchBase(mkvPath, s.StreamIndex)+".sup")
+	defer os.Remove(rawSup)
 
 	if _, err := c.runner().Run(ctx, c.ffmpeg(),
 		"-nostdin",
@@ -209,51 +216,128 @@ func (c *Converter) convertStream(ctx context.Context, mkvPath, dir string, s Su
 		"-map", "0:"+strconv.Itoa(s.StreamIndex),
 		"-c", "copy",
 		"-f", "sup",
-		supPath,
+		rawSup,
 	); err != nil {
 		return "", fmt.Errorf("extracting stream %d: %w", s.StreamIndex, err)
 	}
 
-	args := []string{"--force"}
-	for _, lang := range c.languagesFor(s) {
-		args = append(args, "--language", lang)
-	}
-	if _, err := c.runner().Run(ctx, c.pgsrip(), append(args, supPath)...); err != nil {
-		os.Remove(srtPath)
-		return "", fmt.Errorf("OCRing stream %d: %w", s.StreamIndex, err)
+	raw, err := os.ReadFile(rawSup)
+	if err != nil {
+		return "", fmt.Errorf("reading extracted stream %d: %w", s.StreamIndex, err)
 	}
 
-	// pgsrip can exit cleanly having written nothing, so confirm the SRT is
-	// really there before reporting the stream converted.
-	if _, err := os.Stat(srtPath); err != nil {
+	var lastErr error
+	for _, lang := range c.languagesFor(s) {
+		srtPath, err := c.ripLanguage(ctx, dir, mkvPath, s.StreamIndex, lang, raw)
+		if err == nil {
+			return srtPath, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
+// ripLanguage stages one language-tagged copy of an already-extracted .sup
+// and runs pgsrip against it. pgsrip derives BOTH the OCR language handed to
+// tesseract and the language it filters --language against from the .sup's
+// filename, not from the --language flag itself (pgsrip 0.1.12,
+// media_path.py MediaPath.__init__ / media.py Media.matches / ripper.py
+// PgsToSrtRipper.process): the flag only has to intersect with whatever the
+// filename says, and only selects cleanit rules. So a single pgsrip run can
+// only ever attempt one language, and that language must be baked into the
+// scratch filename via scratchName, or pgsrip silently discards the file
+// (0 PGS subtitles collected, exit 0) instead of erroring.
+func (c *Converter) ripLanguage(ctx context.Context, dir, mkvPath string, streamIndex int, lang string, raw []byte) (string, error) {
+	base := filepath.Join(dir, scratchName(mkvPath, streamIndex, lang))
+	supPath, srtPath := base+".sup", base+".srt"
+	defer os.Remove(supPath)
+
+	if err := os.WriteFile(supPath, raw, 0o644); err != nil {
+		return "", fmt.Errorf("staging stream %d for %s: %w", streamIndex, lang, err)
+	}
+
+	if _, err := c.runner().Run(ctx, c.pgsrip(), "--force", "--language", lang, supPath); err != nil {
 		os.Remove(srtPath)
-		return "", fmt.Errorf("OCRing stream %d: pgsrip produced no %s: %w",
-			s.StreamIndex, filepath.Base(srtPath), err)
+		return "", fmt.Errorf("OCRing stream %d (%s): %w", streamIndex, lang, err)
+	}
+
+	// pgsrip can exit cleanly having written nothing, or having written an
+	// empty SRT when every OCR item was rejected (low confidence, a
+	// graphic-only track, a wrong language pack), so confirm the SRT is
+	// really there and non-empty before reporting the stream converted.
+	st, err := os.Stat(srtPath)
+	if err != nil || st.Size() == 0 {
+		os.Remove(srtPath)
+		return "", fmt.Errorf("OCRing stream %d (%s): pgsrip produced no usable %s",
+			streamIndex, lang, filepath.Base(srtPath))
 	}
 	return srtPath, nil
 }
 
 // languagesFor picks the tesseract codes for one stream: its own language when
 // the configured list covers it, so OCR is not confused by unrelated packs, and
-// otherwise the whole configured list — an untagged or foreign track gets every
-// language we were told to try.
+// otherwise the whole configured list, tried one pgsrip run at a time — an
+// untagged or foreign track gets every language we were told to try, in
+// order, until one produces a usable SRT.
+//
+// Both sides are normalized (trimmed, lowercased) before comparing so that a
+// configured code like " ENG " — which ValidateLanguages accepts — still
+// matches the stream's own (already-lowercased, see analyze.go) language
+// instead of silently falling through, and so pgsrip is never handed a
+// --language value it will reject outright.
 func (c *Converter) languagesFor(s SubtitleStream) []string {
-	configured := c.Languages
+	configured := normalizeLanguages(c.Languages)
 	if len(configured) == 0 {
 		configured = []string{LanguageEnglish}
 	}
-	if s.Language != "" && s.Language != LanguageUndetermined && slices.Contains(configured, s.Language) {
-		return []string{s.Language}
+	lang := strings.ToLower(strings.TrimSpace(s.Language))
+	if lang != "" && lang != LanguageUndetermined && slices.Contains(configured, lang) {
+		return []string{lang}
 	}
 	return configured
 }
 
-// scratchName builds a temp-file base name that is unique per source file and
-// stream, keeping concurrent rips from colliding in a shared temp dir.
-func scratchName(mkvPath string, streamIndex int) string {
+// normalizeLanguages trims and lowercases each entry, dropping empties.
+func normalizeLanguages(languages []string) []string {
+	var out []string
+	for _, l := range languages {
+		l = strings.ToLower(strings.TrimSpace(l))
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// scratchBase builds the shared temp-file base name for one stream: the
+// source file's basename, a short hash of its full path, and the stream
+// index — with no language segment. It is only ever used for the raw,
+// language-agnostic extraction — never handed to pgsrip directly (see
+// scratchName).
+//
+// The hash covers the full mkvPath, not just its basename, so two rips whose
+// MakeMKV output happens to share a filename (e.g. both named title_t00.mkv,
+// which MakeMKV always produces) still land on distinct scratch names in the
+// shared TempDir — otherwise a second disc's extraction can overwrite the
+// first's .sup mid-OCR, and a later run can mistake a stale leftover .srt
+// for a fresh success.
+func scratchBase(mkvPath string, streamIndex int) string {
 	base := filepath.Base(mkvPath)
 	base = strings.TrimSuffix(base, filepath.Ext(base))
-	return fmt.Sprintf("%s.%d", base, streamIndex)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(mkvPath))
+	return fmt.Sprintf("%s.%08x.%d", base, h.Sum32(), streamIndex)
+}
+
+// scratchName builds a temp-file base name in the form pgsrip expects to
+// find a language in: {scratchBase}.{lang}, which for the .sup extension
+// pgsrip parses as base_path="{scratchBase}" and language="{lang}" (pgsrip's
+// MediaPath splits the extension off, then splits what's left again — that
+// second, innermost extension is the language code). Only that innermost
+// segment is read as a language, so everything scratchBase folds in — the
+// stream index, the path hash — is never mistaken for one.
+func scratchName(mkvPath string, streamIndex int, lang string) string {
+	return scratchBase(mkvPath, streamIndex) + "." + lang
 }
 
 // truncate shortens s to at most n bytes, marking that it was cut.
