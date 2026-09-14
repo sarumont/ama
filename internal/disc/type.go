@@ -158,21 +158,29 @@ func (IoctlContentChecker) Content(device string) (DiscContent, error) {
 }
 
 // mounter makes the contents of a device readable at a path and returns a
-// release function that undoes whatever it did.
-type mounter func(device string) (root string, release func(), err error)
+// release function that undoes whatever it did. The release function reports
+// whether that cleanup succeeded; a failed unmount leaves the disc stuck in
+// the drive.
+type mounter func(device string) (root string, release func() error, err error)
 
 // DetectKind reports what kind of disc is in device. A nil checker selects
 // IoctlContentChecker.
 //
 // A non-nil error means the disc could not be examined — the drive would not
-// answer, or a data volume would not mount. That is distinct from a successful
-// examination that found nothing recognisable, which returns KindUnknown with a
-// nil error. Both are conditions the caller should refuse to rip on, but only
-// the error says the disc is still unidentified; KindUnknown says it was
-// identified as nothing AMA handles.
+// answer, or reported no disc loaded or an open tray. That is distinct from a
+// successful examination that found nothing recognisable — including a mount
+// failure, which is what a blank or malformed volume looks like — which
+// returns KindUnknown with a nil error. Both are conditions the caller should
+// refuse to rip on, but only the error says the disc is still unidentified;
+// KindUnknown says it was identified as nothing AMA handles.
 //
 // KindDVD is likewise a normal return. DVD ripping is out of scope for v1 and
 // the caller is expected to warn and skip rather than fail.
+//
+// A third case exists once the disc has been examined successfully: if
+// releasing the mount afterwards fails, DetectKind still returns the kind it
+// found, but with a non-nil error reporting the failed release. The disc is
+// still identified; it is just still mounted.
 func DetectKind(device string, checker ContentChecker) (DiscKind, error) {
 	if checker == nil {
 		checker = IoctlContentChecker{}
@@ -182,7 +190,7 @@ func DetectKind(device string, checker ContentChecker) (DiscKind, error) {
 
 // detectKind is DetectKind with the mount step injected, so tests can drive the
 // data-disc path without root or a real drive.
-func detectKind(device string, checker ContentChecker, mount mounter) (DiscKind, error) {
+func detectKind(device string, checker ContentChecker, mount mounter) (kind DiscKind, err error) {
 	content, err := checker.Content(device)
 	if err != nil {
 		return KindUnknown, fmt.Errorf("disc content %s: %w", device, err)
@@ -204,9 +212,17 @@ func detectKind(device string, checker ContentChecker, mount mounter) (DiscKind,
 
 	root, release, err := mount(device)
 	if err != nil {
-		return KindUnknown, fmt.Errorf("mount %s: %w", device, err)
+		// A mount failure here is what a blank or malformed volume looks
+		// like: the drive said "data disc" but neither udf nor iso9660 can
+		// read a filesystem off it. That is examined-and-unhandled, not a
+		// failed examination.
+		return KindUnknown, nil
 	}
-	defer release()
+	defer func() {
+		if rerr := release(); rerr != nil {
+			err = errors.Join(err, fmt.Errorf("release mount %s: %w", root, rerr))
+		}
+	}()
 
 	return KindFromMount(root), nil
 }
@@ -262,9 +278,9 @@ func isDir(root string, e os.DirEntry) bool {
 //
 // Mounting needs CAP_SYS_ADMIN, which the container is expected to carry along
 // with the passed-through device.
-func mountReadOnly(device string) (string, func(), error) {
+func mountReadOnly(device string) (string, func() error, error) {
 	if root, ok := existingMount(device); ok {
-		return root, func() {}, nil
+		return root, func() error { return nil }, nil
 	}
 
 	dir, err := os.MkdirTemp("", "ama-disc-")
@@ -278,9 +294,15 @@ func mountReadOnly(device string) (string, func(), error) {
 	for _, fstype := range []string{"udf", "iso9660"} {
 		err := syscall.Mount(device, dir, fstype, syscall.MS_RDONLY|syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "")
 		if err == nil {
-			return dir, func() {
-				syscall.Unmount(dir, 0)
-				os.Remove(dir)
+			return dir, func() error {
+				var relErrs []error
+				if err := syscall.Unmount(dir, 0); err != nil {
+					relErrs = append(relErrs, fmt.Errorf("unmount %s: %w", dir, err))
+				}
+				if err := os.Remove(dir); err != nil {
+					relErrs = append(relErrs, fmt.Errorf("remove %s: %w", dir, err))
+				}
+				return errors.Join(relErrs...)
 			}, nil
 		}
 		errs = append(errs, fmt.Errorf("%s: %w", fstype, err))

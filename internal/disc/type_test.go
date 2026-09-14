@@ -200,11 +200,11 @@ func TestDetectKind(t *testing.T) {
 			wantErr:  true,
 		},
 		{
-			name:      "an unmountable data disc is an error",
+			name:      "an unmountable data disc is unknown, not an error",
 			content:   ContentData1,
 			mountErr:  errMount,
 			want:      KindUnknown,
-			wantErr:   true,
+			wantErr:   false,
 			wantMount: true,
 		},
 		{
@@ -226,12 +226,12 @@ func TestDetectKind(t *testing.T) {
 			t.Parallel()
 
 			mounted, released := false, false
-			mount := func(string) (string, func(), error) {
+			mount := func(string) (string, func() error, error) {
 				mounted = true
 				if tt.mountErr != nil {
 					return "", nil, tt.mountErr
 				}
-				return mountLayout(t, tt.entries...), func() { released = true }, nil
+				return mountLayout(t, tt.entries...), func() error { released = true; return nil }, nil
 			}
 
 			checker := fakeContentChecker{content: tt.content, err: tt.checkErr}
@@ -246,9 +246,6 @@ func TestDetectKind(t *testing.T) {
 			if tt.checkErr != nil && !errors.Is(err, tt.checkErr) {
 				t.Errorf("error = %v, want it to wrap %v", err, tt.checkErr)
 			}
-			if tt.mountErr != nil && !errors.Is(err, tt.mountErr) {
-				t.Errorf("error = %v, want it to wrap %v", err, tt.mountErr)
-			}
 			if mounted != tt.wantMount {
 				t.Errorf("mounted = %v, want %v", mounted, tt.wantMount)
 			}
@@ -258,6 +255,28 @@ func TestDetectKind(t *testing.T) {
 				t.Errorf("released = %v, want %v", released, wantRelease)
 			}
 		})
+	}
+}
+
+func TestDetectKindReleaseError(t *testing.T) {
+	t.Parallel()
+
+	// A successful examination whose release fails must still report the
+	// kind it found — the disc was identified, it just did not come loose —
+	// alongside an error naming the failed release.
+	errRelease := errors.New("target is busy")
+	mount := func(string) (string, func() error, error) {
+		return mountLayout(t, "BDMV/"), func() error { return errRelease }, nil
+	}
+
+	checker := fakeContentChecker{content: ContentData1}
+	got, err := detectKind(testDevice, checker, mount)
+
+	if got != KindBluRay {
+		t.Errorf("kind = %v, want %v", got, KindBluRay)
+	}
+	if !errors.Is(err, errRelease) {
+		t.Errorf("error = %v, want it to wrap %v", err, errRelease)
 	}
 }
 
