@@ -20,14 +20,20 @@ import (
 // conservative: a token only belongs here if it is vanishingly unlikely to be a
 // meaningful word in a film title.
 var noiseTokens = map[string]bool{
-	// Media and format.
-	"bluray": true, "blu": true, "ray": true, "bd": true, "bdrom": true,
+	// Media and format. "ray" is deliberately absent: it is only noise as
+	// part of the "blu ray" bigram (see stripNoise), since standing alone it
+	// is also a film title ("Ray", 2004).
+	"bluray": true, "blu": true, "bd": true, "bdrom": true,
 	"bdmv": true, "bd25": true, "bd50": true, "dvd": true, "uhd": true,
 	"hddvd": true, "4k": true, "2160p": true, "1080p": true, "1080i": true,
 	"720p": true, "480p": true, "ntsc": true, "pal": true,
 	// Disc/volume markers. "disc"/"disk" additionally swallow a following
-	// number ("DISC 1"); see stripNoise.
-	"disc": true, "disk": true, "side": true, "volume": true, "vol": true,
+	// number ("DISC 1"); see stripNoise. "volume"/"vol" do not: the number
+	// after them is a sequel marker ("Vol. 2"), not a disc index, and
+	// dropping it would make two different films score identically. "side"
+	// is absent entirely — it is too common a title word ("The Blind Side",
+	// "Side Effects") to strip safely.
+	"volume": true, "vol": true, "disc": true, "disk": true,
 	// Region markers.
 	"region": true, "r1": true, "r2": true, "r3": true, "r4": true,
 	"r5": true, "r6": true,
@@ -35,6 +41,8 @@ var noiseTokens = map[string]bool{
 	"remastered": true, "edition": true, "editions": true, "collectors": true,
 	"collector": true, "anniversary": true, "deluxe": true, "unrated": true,
 	"widescreen": true, "fullscreen": true, "letterbox": true,
+	"special": true, "extended": true, "theatrical": true, "directors": true,
+	"director": true, "cut": true,
 }
 
 // studioTokens are distributor or franchise-owner names that discs prepend to
@@ -88,16 +96,21 @@ func tokenize(label string) []string {
 
 // stripNoise removes noiseTokens. A disc marker also consumes the number that
 // follows it ("DISC 1"), which a bare token list would otherwise leave behind
-// as a stray digit.
+// as a stray digit. "blu" followed by "ray" is dropped as a pair so that
+// "ray" standing alone (as in the film "Ray") is never treated as noise.
 func stripNoise(tokens []string) []string {
 	out := make([]string, 0, len(tokens))
 	for i := 0; i < len(tokens); i++ {
 		tok := tokens[i]
+		if tok == "blu" && i+1 < len(tokens) && tokens[i+1] == "ray" {
+			i++
+			continue
+		}
 		if !noiseTokens[tok] {
 			out = append(out, tok)
 			continue
 		}
-		if (tok == "disc" || tok == "disk" || tok == "side" || tok == "volume" || tok == "vol") &&
+		if (tok == "disc" || tok == "disk") &&
 			i+1 < len(tokens) && isSmallNumber(tokens[i+1]) {
 			i++
 		}
