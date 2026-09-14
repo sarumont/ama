@@ -36,7 +36,10 @@ var ErrNotInstalled = errors.New("makemkvcon not found in PATH")
 // Track is one MakeMKV title. The fields mirror what the manifest's tracks[]
 // entries need from this layer; role classification happens in titles.go.
 type Track struct {
-	// Index is the MakeMKV title index, i.e. the tN in the output file name.
+	// Index is the MakeMKV title index (the TINFO record index), renumbered
+	// over whichever titles MakeMKV selected for this run; it does not
+	// necessarily match the tNN in the output file name. It is also the
+	// manifest's makemkv_index.
 	Index int
 	// Name is MakeMKV's title name, usually derived from the disc volume label.
 	Name string
