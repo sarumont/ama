@@ -64,7 +64,7 @@ func TestNormalize(t *testing.T) {
 		{
 			name:      "edition and region boilerplate",
 			label:     "ALIENS_SPECIAL_EDITION_R1_NTSC_DVD",
-			wantQuery: "aliens special",
+			wantQuery: "aliens",
 		},
 		{
 			name:      "colons and apostrophes in a title",
@@ -126,6 +126,10 @@ var (
 	ironMan     = Candidate{TMDBID: 1726, Title: "Iron Man", Year: 2008, Popularity: 60}
 	ironMan2    = Candidate{TMDBID: 10138, Title: "Iron Man 2", Year: 2010, Popularity: 50}
 	ageOfUltron = Candidate{TMDBID: 99861, Title: "Avengers: Age of Ultron", Year: 2015, Popularity: 45}
+
+	killBillVol1 = Candidate{TMDBID: 24, Title: "Kill Bill: Vol. 1", Year: 2003, Popularity: 50}
+	killBillVol2 = Candidate{TMDBID: 393, Title: "Kill Bill: Vol. 2", Year: 2004, Popularity: 45}
+	rayMovie     = Candidate{TMDBID: 8358, Title: "Ray", Year: 2004, Popularity: 20}
 )
 
 func TestRank(t *testing.T) {
@@ -227,6 +231,25 @@ func TestRank(t *testing.T) {
 			label:      "IRON_MAN_3",
 			candidates: nil,
 			wantOrder:  []int{},
+		},
+		{
+			// Regression: "vol"/"volume" used to swallow the trailing digit
+			// too, so Vol. 1 and Vol. 2 both normalized to "kill bill" and
+			// scored an identical 1.0.
+			name:       "vol keeps the sequel number so Vol 1 and Vol 2 don't tie",
+			label:      "KILL_BILL_VOL_2",
+			candidates: []Candidate{killBillVol1, killBillVol2},
+			wantOrder:  []int{393, 24},
+			wantTopMin: 0.99,
+		},
+		{
+			// Regression: "blu" and "ray" used to be stripped independently,
+			// so RAY_BLU_RAY normalized to the empty string.
+			name:       "blu ray bigram doesn't consume the film Ray",
+			label:      "RAY_BLU_RAY",
+			candidates: []Candidate{rayMovie},
+			wantOrder:  []int{8358},
+			wantTopMin: 0.99,
 		},
 	}
 
