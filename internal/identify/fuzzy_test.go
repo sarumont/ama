@@ -138,6 +138,9 @@ var (
 	killBillVol2 = Candidate{TMDBID: 393, Title: "Kill Bill: Vol. 2", Year: 2004, Popularity: 45}
 	rayMovie     = Candidate{TMDBID: 8358, Title: "Ray", Year: 2004, Popularity: 20}
 	oceansEleven = Candidate{TMDBID: 161, Title: "Ocean's Eleven", Year: 2001, Popularity: 40}
+
+	soldier          = Candidate{TMDBID: 9801, Title: "Soldier", Year: 1998, Popularity: 60}
+	universalSoldier = Candidate{TMDBID: 9800, Title: "Universal Soldier", Year: 1992, Popularity: 30}
 )
 
 func TestRank(t *testing.T) {
@@ -266,6 +269,16 @@ func TestRank(t *testing.T) {
 			label:      "OCEANS_ELEVEN",
 			candidates: []Candidate{oceansEleven},
 			wantOrder:  []int{161},
+			wantTopMin: 0.99,
+		},
+		{
+			// Regression: "universal" used to be stripped as a studio prefix
+			// unconditionally, so UNIVERSAL_SOLDIER normalized to "soldier"
+			// and tied the unrelated film "Soldier" at 1.0.
+			name:       "universal soldier is not eaten as a studio prefix",
+			label:      "UNIVERSAL_SOLDIER",
+			candidates: []Candidate{soldier, universalSoldier},
+			wantOrder:  []int{9800, 9801},
 			wantTopMin: 0.99,
 		},
 	}

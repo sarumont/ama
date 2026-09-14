@@ -49,12 +49,15 @@ var noiseTokens = map[string]bool{
 // the title ("MARVELS_IRON_MAN_3"). They are stripped only from the front of a
 // label, and never when doing so would leave nothing behind, so a title that
 // genuinely starts with one of these words survives elsewhere in the string.
+// "universal", "paramount" and "pictures" are deliberately absent: unlike the
+// names below, they are common enough as title words ("Universal Soldier")
+// that stripping them on sight costs more real titles than it fixes.
 var studioTokens = map[string]bool{
 	"marvel": true, "marvels": true, "disney": true, "disneys": true,
-	"pixar": true, "dreamworks": true, "universal": true, "paramount": true,
+	"pixar": true, "dreamworks": true,
 	"warner": true, "wb": true, "lionsgate": true, "mgm": true,
 	"columbia": true, "miramax": true, "touchstone": true, "dimension": true,
-	"pictures": true, "studios": true, "presents": true,
+	"studios": true, "presents": true,
 }
 
 // minYear and maxYear bound what a 4-digit token may be read as a release year.
