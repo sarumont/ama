@@ -113,6 +113,35 @@ func TestWriteReplacesAtomically(t *testing.T) {
 	assertOnlyFile(t, dir, "rip.manifest.json")
 }
 
+// TestWriteRejectsNilManifest is a regression test: Manifest's MarshalJSON has
+// a value receiver, so *Manifest satisfies json.Marshaler and encoding/json
+// silently turns a nil *Manifest into the JSON literal "null" instead of
+// erroring. Without a guard, Write(path, nil) would overwrite an existing
+// manifest with "null", and Read of that file would come back as a non-nil
+// zero Manifest with no error — a rip's record gone with nothing to report
+// the loss. Write must refuse a nil manifest instead, leaving any existing
+// file untouched.
+func TestWriteRejectsNilManifest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rip.manifest.json")
+	original := New(DiscTypeBluRay, "/dev/sr0")
+	if err := Write(path, original); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if err := Write(path, nil); err == nil {
+		t.Fatal("Write(path, nil) succeeded, want an error")
+	}
+
+	m, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if m.ID != original.ID {
+		t.Errorf("manifest was overwritten by Write(path, nil): ID = %q, want %q", m.ID, original.ID)
+	}
+}
+
 // TestWriteErrorsLeaveNothingBehind forces failures at the two points that can
 // fail once the temp file exists or before it does, and checks each one reports
 // an error and drops no partial state.

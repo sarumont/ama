@@ -76,6 +76,17 @@ func Write(path string, m *Manifest) error {
 
 // write is Write without the lock, for callers that already hold it.
 func write(path string, m *Manifest) error {
+	// A nil m marshals to the JSON literal `null` via Manifest's MarshalJSON
+	// (which has a value receiver, so *Manifest satisfies json.Marshaler and
+	// encoding/json short-circuits a nil pointer to "null" instead of
+	// erroring). That would silently overwrite the authoritative record of a
+	// rip, and Read of the result comes back as a non-nil zero Manifest with
+	// no error, so the caller has nothing to detect the loss with. Reject it
+	// here instead.
+	if m == nil {
+		return fmt.Errorf("writing manifest %s: nil manifest", path)
+	}
+
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding manifest for %s: %w", path, err)
