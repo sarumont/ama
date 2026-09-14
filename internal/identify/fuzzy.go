@@ -63,6 +63,21 @@ const (
 	maxYear = 2099
 )
 
+// diacritics maps common Latin letters with diacritics to their base ASCII
+// form. Disc labels are almost always plain ASCII (ISO-9660/UDF volume
+// identifiers largely are) but TMDB titles are not, so folding these during
+// tokenize keeps "Amélie" and "AMELIE" comparable.
+var diacritics = map[rune]rune{
+	'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a', 'ā': 'a', 'ă': 'a', 'ą': 'a',
+	'ç': 'c', 'ć': 'c', 'ĉ': 'c', 'ċ': 'c', 'č': 'c',
+	'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e', 'ē': 'e', 'ĕ': 'e', 'ė': 'e', 'ę': 'e', 'ě': 'e',
+	'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i', 'ĩ': 'i', 'ī': 'i', 'ĭ': 'i', 'į': 'i',
+	'ñ': 'n', 'ń': 'n', 'ņ': 'n', 'ň': 'n',
+	'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o', 'ø': 'o', 'ō': 'o', 'ŏ': 'o', 'ő': 'o',
+	'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u', 'ũ': 'u', 'ū': 'u', 'ŭ': 'u', 'ů': 'u', 'ű': 'u', 'ų': 'u',
+	'ý': 'y', 'ÿ': 'y', 'ŷ': 'y',
+}
+
 // Normalize cleans a raw disc label into a TMDB search query and, when the
 // label carries one, the release year.
 //
@@ -82,12 +97,25 @@ func Normalize(label string) (query string, year int) {
 	return strings.Join(tokens, " "), year
 }
 
-// tokenize case-folds label and splits it on everything that is not a letter or
-// digit, which covers underscores, dots, dashes, colons and apostrophes alike.
+// tokenize case-folds label and splits it on everything that is not a letter
+// or digit, which covers underscores, dots, dashes and colons alike.
+// Apostrophes are dropped rather than turned into a separator, so a
+// possessive title tokenizes the same whether or not the source spells it
+// with one ("Ocean's Eleven" and "OCEANS_ELEVEN" both become "oceans
+// eleven"). Diacritics are folded to their base letter, since disc labels are
+// almost always plain ASCII but TMDB titles are not ("Amélie" and "AMELIE"
+// both become "amelie").
 func tokenize(label string) []string {
 	mapped := strings.Map(func(r rune) rune {
+		if r == '\'' || r == '’' {
+			return -1
+		}
+		r = unicode.ToLower(r)
+		if folded, ok := diacritics[r]; ok {
+			return folded
+		}
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			return unicode.ToLower(r)
+			return r
 		}
 		return ' '
 	}, label)

@@ -69,7 +69,7 @@ func TestNormalize(t *testing.T) {
 		{
 			name:      "colons and apostrophes in a title",
 			label:     "MARVEL'S_THE_AVENGERS",
-			wantQuery: "s the avengers",
+			wantQuery: "the avengers",
 		},
 		{
 			name:      "year only label keeps the year as the title",
@@ -85,6 +85,13 @@ func TestNormalize(t *testing.T) {
 			name:      "pure noise leaves an empty query",
 			label:     "BLU_RAY_DISC",
 			wantQuery: "",
+		},
+		{
+			// Regression: unicode.IsLetter left diacritics alone, so an
+			// ASCII disc label and an accented TMDB title shared no tokens.
+			name:      "diacritics fold to their base letter",
+			label:     "AMELIE",
+			wantQuery: "amelie",
 		},
 	}
 
@@ -130,6 +137,7 @@ var (
 	killBillVol1 = Candidate{TMDBID: 24, Title: "Kill Bill: Vol. 1", Year: 2003, Popularity: 50}
 	killBillVol2 = Candidate{TMDBID: 393, Title: "Kill Bill: Vol. 2", Year: 2004, Popularity: 45}
 	rayMovie     = Candidate{TMDBID: 8358, Title: "Ray", Year: 2004, Popularity: 20}
+	oceansEleven = Candidate{TMDBID: 161, Title: "Ocean's Eleven", Year: 2001, Popularity: 40}
 )
 
 func TestRank(t *testing.T) {
@@ -249,6 +257,15 @@ func TestRank(t *testing.T) {
 			label:      "RAY_BLU_RAY",
 			candidates: []Candidate{rayMovie},
 			wantOrder:  []int{8358},
+			wantTopMin: 0.99,
+		},
+		{
+			// Regression: apostrophes used to become a space, splitting off a
+			// stray "s" token ("ocean s eleven") that tanked the score.
+			name:       "possessive apostrophe matches the un-apostrophized label",
+			label:      "OCEANS_ELEVEN",
+			candidates: []Candidate{oceansEleven},
+			wantOrder:  []int{161},
 			wantTopMin: 0.99,
 		},
 	}
