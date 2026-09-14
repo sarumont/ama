@@ -122,7 +122,7 @@ func DetectForcedCandidates(streams []SubtitleStream, ratioThreshold float64) []
 	// Copied out of the slice so the stored pointers do not alias the live
 	// StreamIndex fields.
 	fullIndex, forcedIndex := streams[full].StreamIndex, streams[forced].StreamIndex
-	reason := fmt.Sprintf("size ratio %.2f vs stream %d (%d vs %d bytes)",
+	reason := fmt.Sprintf("size ratio %.4g vs stream %d (%d vs %d bytes)",
 		forcedRatio, fullIndex, streams[forced].SizeBytes, streams[full].SizeBytes)
 
 	streams[forced].ForcedCandidate = true

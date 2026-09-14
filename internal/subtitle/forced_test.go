@@ -42,7 +42,7 @@ func TestDetectForcedCandidates(t *testing.T) {
 			},
 			threshold: 0.25,
 			want: map[int]want{
-				7:  {candidate: true, reason: "size ratio 0.06 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
+				7:  {candidate: true, reason: "size ratio 0.06364 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
 				12: {pairedIdx: idx(7)},
 			},
 		},
@@ -56,7 +56,7 @@ func TestDetectForcedCandidates(t *testing.T) {
 			},
 			threshold: 0.25,
 			want: map[int]want{
-				7:  {candidate: true, reason: "size ratio 0.06 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
+				7:  {candidate: true, reason: "size ratio 0.06364 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
 				12: {pairedIdx: idx(7)},
 			},
 		},
@@ -102,7 +102,7 @@ func TestDetectForcedCandidates(t *testing.T) {
 			},
 			threshold: 0.5,
 			want: map[int]want{
-				3: {candidate: true, reason: "size ratio 0.40 vs stream 4 (4000000 vs 10000000 bytes)", pairedIdx: idx(4)},
+				3: {candidate: true, reason: "size ratio 0.4 vs stream 4 (4000000 vs 10000000 bytes)", pairedIdx: idx(4)},
 				4: {pairedIdx: idx(3)},
 			},
 		},
@@ -114,7 +114,7 @@ func TestDetectForcedCandidates(t *testing.T) {
 			},
 			threshold: 0,
 			want: map[int]want{
-				3: {candidate: true, reason: "size ratio 0.10 vs stream 4 (1000000 vs 10000000 bytes)", pairedIdx: idx(4)},
+				3: {candidate: true, reason: "size ratio 0.1 vs stream 4 (1000000 vs 10000000 bytes)", pairedIdx: idx(4)},
 				4: {pairedIdx: idx(3)},
 			},
 		},
@@ -140,7 +140,7 @@ func TestDetectForcedCandidates(t *testing.T) {
 			threshold: 0.25,
 			want: map[int]want{
 				2:  {},
-				7:  {candidate: true, reason: "size ratio 0.06 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
+				7:  {candidate: true, reason: "size ratio 0.06364 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
 				9:  {},
 				12: {pairedIdx: idx(7)},
 			},
@@ -180,7 +180,7 @@ func TestDetectForcedCandidates(t *testing.T) {
 			threshold: 0.25,
 			want: map[int]want{
 				7:  {},
-				9:  {candidate: true, reason: "size ratio 0.03 vs stream 12 (900000 vs 33000000 bytes)", pairedIdx: idx(12)},
+				9:  {candidate: true, reason: "size ratio 0.02727 vs stream 12 (900000 vs 33000000 bytes)", pairedIdx: idx(12)},
 				12: {pairedIdx: idx(9)},
 			},
 		},
@@ -227,7 +227,7 @@ func TestDetectForcedCandidates(t *testing.T) {
 			},
 			threshold: 0.25,
 			want: map[int]want{
-				7:  {candidate: true, reason: "size ratio 0.06 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
+				7:  {candidate: true, reason: "size ratio 0.06364 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
 				12: {pairedIdx: idx(7)},
 			},
 		},
@@ -252,7 +252,7 @@ func TestDetectForcedCandidates(t *testing.T) {
 			},
 			threshold: 0.25,
 			want: map[int]want{
-				7:  {candidate: true, reason: "size ratio 0.06 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
+				7:  {candidate: true, reason: "size ratio 0.06364 vs stream 12 (2100000 vs 33000000 bytes)", pairedIdx: idx(12)},
 				12: {pairedIdx: idx(7)},
 			},
 		},
