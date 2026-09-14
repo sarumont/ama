@@ -112,6 +112,10 @@ func hasOption(args []string, name, value string) bool {
 func TestMuxWritesProcessedFile(t *testing.T) {
 	mkvPath, srts := muxFixture(t, "forced.srt", "full.srt")
 	runner := &fakeMuxRunner{}
+	sourceStreams := []SubtitleStream{
+		{StreamIndex: 7, DefaultFlagInSource: true},
+		{StreamIndex: 12},
+	}
 	results := []ConversionResult{
 		{StreamIndex: 7, Language: "eng", SRTPath: srts[0], Converted: true, Forced: true, Default: true},
 		{StreamIndex: 12, Language: "eng", SRTPath: srts[1], Converted: true},
@@ -122,7 +126,7 @@ func TestMuxWritesProcessedFile(t *testing.T) {
 		t.Fatalf("reading source: %v", err)
 	}
 
-	out, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, results)
+	out, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, sourceStreams, results)
 	if err != nil {
 		t.Fatalf("Mux: %v", err)
 	}
@@ -161,8 +165,30 @@ func TestMuxWritesProcessedFile(t *testing.T) {
 	if call[o+1] == mkvPath || call[o+1] == want {
 		t.Errorf("mkvmerge wrote directly to %q, want a temp path", call[o+1])
 	}
-	if call[o+2] != mkvPath {
-		t.Errorf("got first input %q, want the source %q", call[o+2], mkvPath)
+	// The source is the first *file* input (its own disposition-clearing flags
+	// precede it), so its streams lead the output.
+	srcIdx := slices.Index(call, mkvPath)
+	if srcIdx < 0 {
+		t.Fatalf("source %q missing from mkvmerge call: %v", mkvPath, call)
+	}
+	if slices.Contains(call[o+2:srcIdx], srts[0]) || slices.Contains(call[o+2:srcIdx], srts[1]) {
+		t.Errorf("an SRT appears before the source input: %v", call)
+	}
+
+	// The source's own existing subtitle tracks have their disposition
+	// explicitly cleared, so a source track already flagged default (as PGS
+	// tracks commonly are) does not survive into the output as a second
+	// default track alongside the new OCRed one.
+	source := optionsBefore(t, call, mkvPath)
+	for _, want := range [][2]string{
+		{"--default-track-flag", "7:0"},
+		{"--forced-display-flag", "7:0"},
+		{"--default-track-flag", "12:0"},
+		{"--forced-display-flag", "12:0"},
+	} {
+		if !hasOption(source, want[0], want[1]) {
+			t.Errorf("source input missing %s %s: %v", want[0], want[1], source)
+		}
 	}
 
 	// Per-file options precede the SRT they apply to: the forced track gets both
@@ -206,9 +232,10 @@ func TestMuxWritesProcessedFile(t *testing.T) {
 func TestMuxUndeterminedLanguage(t *testing.T) {
 	mkvPath, srts := muxFixture(t, "und.srt")
 	runner := &fakeMuxRunner{}
+	sourceStreams := []SubtitleStream{{StreamIndex: 3}}
 	results := []ConversionResult{{StreamIndex: 3, SRTPath: srts[0], Converted: true}}
 
-	if _, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, results); err != nil {
+	if _, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, sourceStreams, results); err != nil {
 		t.Fatalf("Mux: %v", err)
 	}
 	if !hasOption(runner.calls[0], "--language", "0:und") {
@@ -231,7 +258,7 @@ func TestMuxSkippedWhenNothingConverted(t *testing.T) {
 			mkvPath, _ := muxFixture(t)
 			runner := &fakeMuxRunner{}
 
-			out, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, results)
+			out, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, nil, results)
 			if err != nil {
 				t.Fatalf("Mux: %v", err)
 			}
@@ -250,12 +277,13 @@ func TestMuxSkipsFailedResults(t *testing.T) {
 	mkvPath, srts := muxFixture(t, "ok.srt")
 	runner := &fakeMuxRunner{}
 	msg := "pgsrip: exit status 1"
+	sourceStreams := []SubtitleStream{{StreamIndex: 7}, {StreamIndex: 12}}
 	results := []ConversionResult{
 		{StreamIndex: 7, Language: "eng", Error: &msg},
 		{StreamIndex: 12, Language: "eng", SRTPath: srts[0], Converted: true},
 	}
 
-	if _, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, results); err != nil {
+	if _, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, sourceStreams, results); err != nil {
 		t.Fatalf("Mux: %v", err)
 	}
 	call := runner.calls[0]
@@ -274,11 +302,12 @@ func TestMuxSkipsFailedResults(t *testing.T) {
 func TestMuxFailureLeavesNoPartialOutput(t *testing.T) {
 	mkvPath, srts := muxFixture(t, "forced.srt")
 	runner := &fakeMuxRunner{err: exitError{code: 2}, writeOutputOnErr: true}
+	sourceStreams := []SubtitleStream{{StreamIndex: 7}}
 	results := []ConversionResult{
 		{StreamIndex: 7, Language: "eng", SRTPath: srts[0], Converted: true, Forced: true, Default: true},
 	}
 
-	out, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, results)
+	out, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, sourceStreams, results)
 	if err == nil {
 		t.Fatal("Mux succeeded, want error")
 	}
@@ -302,11 +331,12 @@ func TestMuxWarningExitSucceeds(t *testing.T) {
 	mkvPath, srts := muxFixture(t, "forced.srt")
 	// mkvmerge exit 1 means "finished with warnings": the output is complete.
 	runner := &fakeMuxRunner{err: exitError{code: 1}, writeOutputOnErr: true}
+	sourceStreams := []SubtitleStream{{StreamIndex: 7}}
 	results := []ConversionResult{
 		{StreamIndex: 7, Language: "eng", SRTPath: srts[0], Converted: true, Forced: true, Default: true},
 	}
 
-	out, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, results)
+	out, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, sourceStreams, results)
 	if err != nil {
 		t.Fatalf("Mux on warning exit: %v", err)
 	}
@@ -314,6 +344,47 @@ func TestMuxWarningExitSucceeds(t *testing.T) {
 		t.Fatalf("processed file not in place: %v", err)
 	}
 	assertOnlyFiles(t, filepath.Dir(mkvPath), "Iron Man 3 (2013).mkv", "Iron Man 3 (2013).processed.mkv")
+}
+
+// TestMuxCapsDefaultAtOneTrack covers the case where more than one source
+// stream is forced-flagged (a multi-language disc), which makes
+// ConversionResult.Default true for more than one result: only the first
+// converted track may end up default-flagged in the output, or players have
+// no deterministic default subtitle to pick.
+func TestMuxCapsDefaultAtOneTrack(t *testing.T) {
+	mkvPath, srts := muxFixture(t, "eng.srt", "fra.srt", "spa.srt")
+	runner := &fakeMuxRunner{}
+	sourceStreams := []SubtitleStream{{StreamIndex: 7}, {StreamIndex: 8}, {StreamIndex: 9}}
+	results := []ConversionResult{
+		{StreamIndex: 7, Language: "eng", SRTPath: srts[0], Converted: true, Forced: true, Default: true},
+		{StreamIndex: 8, Language: "fra", SRTPath: srts[1], Converted: true, Forced: true, Default: true},
+		{StreamIndex: 9, Language: "spa", SRTPath: srts[2], Converted: true, Forced: true, Default: true},
+	}
+
+	if _, err := testMuxer(t, runner).Mux(context.Background(), mkvPath, sourceStreams, results); err != nil {
+		t.Fatalf("Mux: %v", err)
+	}
+
+	call := runner.calls[0]
+	eng := optionsBefore(t, call, srts[0])
+	fra := optionsBefore(t, call, srts[1])
+	spa := optionsBefore(t, call, srts[2])
+
+	if !hasOption(eng, "--default-track-flag", "0:1") {
+		t.Errorf("first forced track should be default: %v", eng)
+	}
+	if !hasOption(fra, "--default-track-flag", "0:0") {
+		t.Errorf("second forced track should not be default: %v", fra)
+	}
+	if !hasOption(spa, "--default-track-flag", "0:0") {
+		t.Errorf("third forced track should not be default: %v", spa)
+	}
+	// The forced flag itself is untouched: every language can still carry it.
+	for name, opts := range map[string][]string{"eng": eng, "fra": fra, "spa": spa} {
+		if !hasOption(opts, "--forced-display-flag", "0:1") {
+			t.Errorf("%s track should still be forced: %v", name, opts)
+		}
+	}
 }
 
 func TestProcessedPath(t *testing.T) {

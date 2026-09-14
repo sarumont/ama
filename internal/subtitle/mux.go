@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -50,8 +51,10 @@ type Muxer struct {
 }
 
 // Mux muxes results into a processed MKV beside mkvPath using mkvmerge on PATH.
-func Mux(ctx context.Context, mkvPath string, results []ConversionResult) (string, error) {
-	return (&Muxer{}).Mux(ctx, mkvPath, results)
+// sourceStreams is the source's own subtitle stream list from Analyze, used to
+// clear the disposition of the source's existing subtitle tracks in the output.
+func Mux(ctx context.Context, mkvPath string, sourceStreams []SubtitleStream, results []ConversionResult) (string, error) {
+	return (&Muxer{}).Mux(ctx, mkvPath, sourceStreams, results)
 }
 
 // Mux writes {movie}.processed.mkv beside mkvPath, containing every stream of
@@ -67,7 +70,16 @@ func Mux(ctx context.Context, mkvPath string, results []ConversionResult) (strin
 // Each added track carries the language of the PGS stream it came from, and the
 // track built from the confirmed forced stream gets both the forced and default
 // flags (a user's override of which stream that is arrives here already applied
-// to ConversionResult.Forced); every other added track gets neither flag.
+// to ConversionResult.Forced); every other added track gets neither flag. At
+// most one added track ever gets the default flag, even if more than one
+// result carries Default, since a source can have a forced-flagged track per
+// language and only one output track may be marked default.
+//
+// The source's own existing subtitle tracks have their default and forced
+// flags explicitly cleared in the output: mkvmerge otherwise carries a source
+// track's disposition through unchanged, and source PGS tracks commonly
+// already carry the default flag, which would leave two default subtitle
+// tracks in the processed file and defeat the point of this stage.
 //
 // mkvmerge writes to a temp file in the destination directory which is renamed
 // into place only once it exits successfully, so a failed or killed mux never
@@ -78,7 +90,7 @@ func Mux(ctx context.Context, mkvPath string, results []ConversionResult) (strin
 // On success the consumed SRTs — which Converter.Convert deliberately leaves in
 // its temp dir — are deleted. On failure they are left alone so a retry does
 // not have to OCR them again.
-func (m *Muxer) Mux(ctx context.Context, mkvPath string, results []ConversionResult) (string, error) {
+func (m *Muxer) Mux(ctx context.Context, mkvPath string, sourceStreams []SubtitleStream, results []ConversionResult) (string, error) {
 	converted := convertedResults(results)
 	if len(converted) == 0 {
 		m.logger().Info("subtitle: nothing to mux, keeping original", "file", mkvPath)
@@ -101,7 +113,9 @@ func (m *Muxer) Mux(ctx context.Context, mkvPath string, results []ConversionRes
 		}
 	}
 
-	args := append([]string{"-o", tmpPath, mkvPath}, subtitleArgs(converted)...)
+	args := append([]string{"-o", tmpPath}, sourceSubtitleArgs(sourceStreams)...)
+	args = append(args, mkvPath)
+	args = append(args, subtitleArgs(converted)...)
 	if _, err := m.runner().Run(ctx, m.mkvmerge(), args...); err != nil {
 		if !isWarningExit(err) {
 			cleanup()
@@ -145,12 +159,38 @@ func convertedResults(results []ConversionResult) []ConversionResult {
 	return out
 }
 
+// sourceSubtitleArgs clears the default and forced flags on every one of the
+// source's existing subtitle tracks, keyed by SubtitleStream.StreamIndex — the
+// same track ID mkvmerge assigns, since both number tracks by their order in
+// the container. Without this, mkvmerge carries each source track's original
+// disposition straight through, and a source PGS track flagged default (common
+// on Blu-ray discs) would leave two default subtitle tracks in the output: the
+// original bitmap track and the new OCRed one.
+func sourceSubtitleArgs(streams []SubtitleStream) []string {
+	var args []string
+	for _, s := range streams {
+		id := strconv.Itoa(s.StreamIndex)
+		args = append(args,
+			"--default-track-flag", id+":0",
+			"--forced-display-flag", id+":0",
+		)
+	}
+	return args
+}
+
 // subtitleArgs builds the mkvmerge arguments appending each SRT as a new track.
 // mkvmerge applies per-file options to the input file that follows them, so
-// every flag for a track is emitted immediately before its own SRT path.
+// every flag for a track is emitted immediately before its own SRT path. At
+// most one track is ever emitted with the default flag set: ForcedCandidate is
+// capped at one per file, but ForcedFlagInSource is not, so more than one
+// result can carry Default here — only the first is honored.
 func subtitleArgs(converted []ConversionResult) []string {
 	var args []string
+	defaultAssigned := false
 	for _, r := range converted {
+		isDefault := r.Default && !defaultAssigned
+		defaultAssigned = defaultAssigned || isDefault
+
 		args = append(args,
 			"--language", srtTrackID+":"+muxLanguage(r.Language),
 			// pgsrip writes UTF-8; saying so keeps mkvmerge from guessing.
@@ -161,7 +201,7 @@ func subtitleArgs(converted []ConversionResult) []string {
 		}
 		args = append(args,
 			"--forced-display-flag", srtTrackID+":"+mkvBool(r.Forced),
-			"--default-track-flag", srtTrackID+":"+mkvBool(r.Default),
+			"--default-track-flag", srtTrackID+":"+mkvBool(isDefault),
 			r.SRTPath,
 		)
 	}
