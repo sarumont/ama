@@ -105,6 +105,12 @@ func write(path string, m *Manifest) error {
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return fmt.Errorf("creating manifest directory %s: %w", dir, err)
 	}
+	// MkdirAll's mode is masked by the process umask, so under a restrictive
+	// umask the directory can end up less permissive than dirPerm even though
+	// the file below is explicitly chmodded to filePerm — making that chmod
+	// pointless if tooling can't traverse into the directory to reach the
+	// file. Best-effort: a failure here doesn't invalidate anything written.
+	_ = os.Chmod(dir, dirPerm)
 
 	// The temp file must share a directory with the destination for the rename
 	// to be atomic, and the leading dot keeps it out of the way of anything
@@ -130,11 +136,25 @@ func write(path string, m *Manifest) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing temp manifest %s: %w", tmp.Name(), err)
 	}
-	if err := os.Chmod(tmp.Name(), filePerm); err != nil {
-		return fmt.Errorf("setting mode on temp manifest %s: %w", tmp.Name(), err)
-	}
+	// Best-effort: the data is already fully written, synced and closed, so a
+	// destination filesystem that rejects chmod outright (exFAT, NTFS, a CIFS
+	// share without unix extensions) should not cost us a manifest that would
+	// otherwise have landed fine — and on a filesystem with no permission bits
+	// the file is world-readable anyway.
+	_ = os.Chmod(tmp.Name(), filePerm)
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("renaming temp manifest over %s: %w", path, err)
+	}
+	// The rename is a directory-metadata operation; tmp.Sync above only
+	// persisted the file's contents. Without fsyncing dir too, a crash or
+	// hard container kill can lose the rename from the journal — for a first
+	// write, where MkdirAll and the rename are both fresh metadata, that
+	// means the manifest simply does not exist afterward. Best-effort: on a
+	// filesystem where directory fsync isn't meaningful, there's nothing more
+	// to do here anyway.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
 	}
 	return nil
 }
