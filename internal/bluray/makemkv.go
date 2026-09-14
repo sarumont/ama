@@ -629,6 +629,14 @@ const (
 	settingsDirName  = ".MakeMKV"
 	settingsFileName = "settings.conf"
 	appKeySetting    = "app_Key"
+
+	// appDefaultSelectionSetting controls which streams makemkvcon mkv keeps.
+	// MakeMKV's built-in default profile drops audio/subtitle streams outside
+	// the favourite language, which conflicts with this project's
+	// preservation-first goal of bit-perfect MKVs, so it is pinned to "keep
+	// everything" alongside the license key.
+	appDefaultSelectionSetting = "app_DefaultSelectionString"
+	appDefaultSelectionValue   = "+sel:all"
 )
 
 // SettingsPath reports where MakeMKV keeps its settings for the current user.
@@ -641,7 +649,8 @@ func SettingsPath() (string, error) {
 }
 
 // WriteLicenseKey stores the makemkv.key config value in MakeMKV's settings
-// file, creating it if needed and leaving any other settings untouched. The
+// file, creating it if needed and leaving any other settings untouched except
+// app_DefaultSelectionString, which is pinned to keep every stream. The
 // daemon calls this once at startup; a purchased key never changes, so there is
 // no rotation here.
 func WriteLicenseKey(key string) error {
@@ -673,10 +682,13 @@ func writeLicenseKeyTo(path, key string) error {
 		return fmt.Errorf("makemkv: creating %s: %w", dir, err)
 	}
 
-	contents := setAppKey(string(existing), key)
+	contents := setSetting(string(existing), appKeySetting, key)
+	contents = setSetting(contents, appDefaultSelectionSetting, appDefaultSelectionValue)
 
 	// Write to a temp file and rename, so a crash cannot leave MakeMKV with a
-	// half-written settings file.
+	// half-written settings file. The temp file's data and the directory
+	// entry are both fsynced, since without that a crash (or power loss)
+	// around the rename can still commit an empty settings.conf on ext4.
 	tmp, err := os.CreateTemp(dir, settingsFileName+".*")
 	if err != nil {
 		return fmt.Errorf("makemkv: creating temp file in %s: %w", dir, err)
@@ -691,22 +703,35 @@ func writeLicenseKeyTo(path, key string) error {
 		tmp.Close()
 		return fmt.Errorf("makemkv: writing temp file: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("makemkv: syncing temp file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("makemkv: writing temp file: %w", err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("makemkv: replacing %s: %w", path, err)
 	}
+
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("makemkv: opening %s: %w", dir, err)
+	}
+	defer dirFile.Close()
+	if err := dirFile.Sync(); err != nil {
+		return fmt.Errorf("makemkv: syncing %s: %w", dir, err)
+	}
 	return nil
 }
 
-// setAppKey replaces the app_Key line in a settings file, or appends one.
-func setAppKey(contents, key string) string {
-	line := fmt.Sprintf("%s = %q", appKeySetting, key)
+// setSetting replaces name's line in a settings file, or appends one.
+func setSetting(contents, name, value string) string {
+	line := fmt.Sprintf("%s = %q", name, value)
 
 	lines := strings.Split(contents, "\n")
 	for i, existing := range lines {
-		if !isAppKeyLine(existing) {
+		if !isSettingLine(existing, name) {
 			continue
 		}
 		lines[i] = line
@@ -720,11 +745,11 @@ func setAppKey(contents, key string) string {
 	return trimmed + "\n" + line + "\n"
 }
 
-func isAppKeyLine(line string) bool {
+func isSettingLine(line, name string) bool {
 	rest := strings.TrimSpace(line)
-	if !strings.HasPrefix(rest, appKeySetting) {
+	if !strings.HasPrefix(rest, name) {
 		return false
 	}
-	rest = strings.TrimSpace(strings.TrimPrefix(rest, appKeySetting))
+	rest = strings.TrimSpace(strings.TrimPrefix(rest, name))
 	return strings.HasPrefix(rest, "=")
 }

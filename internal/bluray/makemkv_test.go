@@ -474,7 +474,7 @@ func TestWriteLicenseKeyTo(t *testing.T) {
 		{
 			name: "creates a new settings file",
 			key:  key,
-			want: "app_Key = \"" + key + "\"\n",
+			want: "app_Key = \"" + key + "\"\napp_DefaultSelectionString = \"+sel:all\"\n",
 		},
 		{
 			name:     "replaces an existing key and keeps other settings",
@@ -488,7 +488,7 @@ func TestWriteLicenseKeyTo(t *testing.T) {
 			create:   true,
 			existing: "app_DestinationDir = \"/media\"\n",
 			key:      key,
-			want:     "app_DestinationDir = \"/media\"\napp_Key = \"" + key + "\"\n",
+			want:     "app_DestinationDir = \"/media\"\napp_Key = \"" + key + "\"\napp_DefaultSelectionString = \"+sel:all\"\n",
 		},
 		{
 			name:    "rejects an empty key",
