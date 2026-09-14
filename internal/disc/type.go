@@ -1,3 +1,5 @@
+//go:build linux
+
 package disc
 
 // Disc kind detection. A DiscInserted event says a disc is readable; this says
