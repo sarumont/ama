@@ -87,16 +87,24 @@ var diacritics = map[rune]rune{
 // Separators (underscores, dots, dashes, punctuation) become spaces, the result
 // is case-folded and whitespace-collapsed, disc-label noise tokens are dropped,
 // and a leading studio name is removed. A 4-digit token in [1900, 2099] is
-// returned as the year and removed from the query — but only when other words
-// remain, so a label that is nothing but a year ("2012") stays a title.
+// returned as the year and removed from the query when it is trailing (the
+// usual "TITLE_YEAR" disc convention) or leading and immediately followed by
+// a studio token ("YEAR_STUDIO_TITLE") — but only when other words remain, so
+// a label that is nothing but a year ("2012") stays a title. A year elsewhere
+// in the label (including a title-embedded one like "Blade Runner 2049") is
+// left in the query untouched, since position alone can't otherwise tell a
+// release year from a title that happens to contain one.
+//
+// The year is extracted before the studio prefix is stripped, so a leading
+// year doesn't hide the studio token behind it ("1995_DISNEY_TOY_STORY").
 //
 // The returned year is 0 when the label has none. Normalize is idempotent:
 // normalizing an already-normalized query yields the same query.
 func Normalize(label string) (query string, year int) {
 	tokens := tokenize(label)
 	tokens = stripNoise(tokens)
-	tokens = stripStudioPrefix(tokens)
 	tokens, year = extractYear(tokens)
+	tokens = stripStudioPrefix(tokens)
 	return strings.Join(tokens, " "), year
 }
 
@@ -158,18 +166,38 @@ func stripStudioPrefix(tokens []string) []string {
 	return tokens
 }
 
-// extractYear pulls the last year-like token out of tokens, leaving it in place
-// when it is the only token left.
+// extractYear pulls a single unambiguous year-like token out of tokens.
+//
+// It only extracts when exactly one token in the label is year-shaped: a
+// trailing year is treated as a release year ("TITLE_YEAR"); a leading year
+// is only extracted when immediately followed by a studio token
+// ("YEAR_STUDIO_TITLE"), since a bare leading year is otherwise usually part
+// of the title itself ("2001: A Space Odyssey"). A year token anywhere else,
+// a label that is nothing but a year, or a label with more than one
+// year-shaped token (too ambiguous to guess which one is the release year)
+// is left untouched.
 func extractYear(tokens []string) ([]string, int) {
-	for i := len(tokens) - 1; i >= 0; i-- {
-		y, ok := asYear(tokens[i])
-		if !ok {
-			continue
+	if len(tokens) <= 1 {
+		return tokens, 0
+	}
+
+	yearIdx, count := -1, 0
+	for i, tok := range tokens {
+		if _, ok := asYear(tok); ok {
+			yearIdx = i
+			count++
 		}
-		if len(tokens) == 1 {
-			return tokens, 0
-		}
-		return append(append([]string{}, tokens[:i]...), tokens[i+1:]...), y
+	}
+	if count != 1 {
+		return tokens, 0
+	}
+
+	y, _ := asYear(tokens[yearIdx])
+	if yearIdx == len(tokens)-1 {
+		return append([]string{}, tokens[:yearIdx]...), y
+	}
+	if yearIdx == 0 && studioTokens[tokens[1]] {
+		return tokens[1:], y
 	}
 	return tokens, 0
 }
