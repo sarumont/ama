@@ -359,6 +359,29 @@ func TestClientRip(t *testing.T) {
 	}
 }
 
+// TestClientRipPartialFailure guards against makemkvcon exiting 0 while
+// MSG:5036 reports that some titles failed partway through: the output files
+// it did manage to write (however truncated) still exist on disk, so the
+// file-existence check alone would call this a successful rip.
+func TestClientRipPartialFailure(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"IRON_MAN_3_t00.mkv", "IRON_MAN_3_t01.mkv"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("mkv"), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	runner := &fakeRunner{stdout: fixture(t, "mkv_partial_failure.txt")}
+	client := &Client{Runner: runner, MinLengthSeconds: 60}
+
+	tracks, err := client.Rip(context.Background(), "disc:0", dir)
+	if err == nil {
+		t.Fatalf("Rip succeeded with %+v, want error", tracks)
+	}
+	if !strings.Contains(err.Error(), "1 titles saved, 1 failed") {
+		t.Errorf("error %q does not report MSG:5036's failed count", err)
+	}
+}
+
 func TestParseDuration(t *testing.T) {
 	tests := []struct {
 		value   string
