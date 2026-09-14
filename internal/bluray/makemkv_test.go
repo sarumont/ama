@@ -129,12 +129,12 @@ func TestClientInfoArgs(t *testing.T) {
 		{
 			name:      "minimum title length applied",
 			minLength: 60,
-			want:      []string{"-r", "--cache=1", "--minlength=60", "info", "disc:0"},
+			want:      []string{"-r", "--cache=1024", "--minlength=60", "info", "disc:0"},
 		},
 		{
-			name:      "no minimum",
+			name:      "zero means no minimum, passed explicitly",
 			minLength: 0,
-			want:      []string{"-r", "--cache=1", "info", "disc:0"},
+			want:      []string{"-r", "--cache=1024", "--minlength=0", "info", "disc:0"},
 		},
 	}
 
@@ -319,7 +319,7 @@ func TestClientRip(t *testing.T) {
 				t.Fatalf("Rip: %v", err)
 			}
 
-			wantArgs := []string{"-r", "--cache=1", "--minlength=60", "mkv", "disc:0", "all", dir}
+			wantArgs := []string{"-r", "--cache=1024", "--minlength=60", "mkv", "disc:0", "all", dir}
 			if !reflect.DeepEqual(runner.args, wantArgs) {
 				t.Errorf("args = %v, want %v", runner.args, wantArgs)
 			}

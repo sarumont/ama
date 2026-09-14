@@ -184,10 +184,10 @@ func (c *Client) Rip(ctx context.Context, source, outputDir string) ([]Track, er
 }
 
 // commonArgs are the options shared by every invocation: robot mode, MakeMKV's
-// own read cache, and the minimum title length.
+// own read cache (in megabytes), and the minimum title length.
 func (c *Client) commonArgs() []string {
-	args := []string{"-r", "--cache=1"}
-	if c.MinLengthSeconds > 0 {
+	args := []string{"-r", "--cache=1024"}
+	if c.MinLengthSeconds >= 0 {
 		args = append(args, "--minlength="+strconv.Itoa(c.MinLengthSeconds))
 	}
 	return args
