@@ -90,13 +90,19 @@ type CommandRunner interface {
 type ExecRunner struct{}
 
 // Run executes name with args, returning whatever it wrote to stdout. A
-// non-zero exit yields a *CommandError carrying stderr.
+// non-zero exit yields a *CommandError carrying stderr, unless ctx was
+// cancelled or timed out first, in which case the returned error wraps
+// ctx.Err() so callers can tell a cancelled rip from a genuine crash with
+// errors.Is.
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return stdout.Bytes(), fmt.Errorf("%w: %v", ctxErr, err)
+		}
 		return stdout.Bytes(), &CommandError{Name: name, Stderr: stderr.String(), Err: err}
 	}
 	return stdout.Bytes(), nil
