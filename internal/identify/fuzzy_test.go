@@ -93,6 +93,22 @@ func TestNormalize(t *testing.T) {
 			label:     "AMELIE",
 			wantQuery: "amelie",
 		},
+		{
+			// Regression: stripStudioPrefix ran before extractYear, so a
+			// leading year hid the studio token behind it.
+			name:      "leading year ahead of a studio token is extracted first",
+			label:     "1995_DISNEY_TOY_STORY",
+			wantQuery: "toy story",
+			wantYear:  1995,
+		},
+		{
+			// A bare leading year with no studio token after it is left as
+			// part of the title, since it can't be told apart from a real
+			// release year by position alone.
+			name:      "leading year with no studio token stays in the title",
+			label:     "2001_A_SPACE_ODYSSEY",
+			wantQuery: "2001 a space odyssey",
+		},
 	}
 
 	for _, tt := range tests {
