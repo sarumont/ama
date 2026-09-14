@@ -83,6 +83,13 @@ type DiscContent int
 const (
 	// ContentNoInfo means the drive will not say.
 	ContentNoInfo DiscContent = 0
+	// ContentNoDisc means the drive answered but there is no disc loaded —
+	// CDROMREADTOCHDR came back -ENOMEDIUM. A caller that just saw an
+	// insertion event can hit this if DetectKind runs before the drive has
+	// actually settled.
+	ContentNoDisc DiscContent = 1
+	// ContentTrayOpen means the tray is open.
+	ContentTrayOpen DiscContent = 2
 	// ContentAudio means every track is CDDA audio.
 	ContentAudio DiscContent = 100
 	// ContentData1 and the three below it are the data track modes. They are
@@ -95,6 +102,32 @@ const (
 	// ContentMixed means both audio and data tracks are present.
 	ContentMixed DiscContent = 105
 )
+
+// String implements fmt.Stringer.
+func (c DiscContent) String() string {
+	switch c {
+	case ContentNoInfo:
+		return "no_info"
+	case ContentNoDisc:
+		return "no_disc"
+	case ContentTrayOpen:
+		return "tray_open"
+	case ContentAudio:
+		return "audio"
+	case ContentData1:
+		return "data1"
+	case ContentData2:
+		return "data2"
+	case ContentXA21:
+		return "xa21"
+	case ContentXA22:
+		return "xa22"
+	case ContentMixed:
+		return "mixed"
+	default:
+		return fmt.Sprintf("unknown(%d)", int(c))
+	}
+}
 
 // ContentChecker reports what the disc in a drive holds. It exists so kind
 // detection can be tested against a scripted drive, the same way StatusChecker
@@ -160,6 +193,13 @@ func detectKind(device string, checker ContentChecker, mount mounter) (DiscKind,
 	// Mixed mode counts as a CD — the audio tracks are what gets archived.
 	if content == ContentAudio || content == ContentMixed {
 		return KindCD, nil
+	}
+
+	// Neither of these is "examined, nothing we handle" — the disc was not
+	// examined at all. A caller that just saw an insertion event can hit
+	// ContentNoDisc if DetectKind runs before the drive has settled.
+	if content == ContentNoDisc || content == ContentTrayOpen {
+		return KindUnknown, fmt.Errorf("disc content %s: %s", device, content)
 	}
 
 	root, release, err := mount(device)

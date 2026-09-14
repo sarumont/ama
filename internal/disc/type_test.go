@@ -207,6 +207,18 @@ func TestDetectKind(t *testing.T) {
 			wantErr:   true,
 			wantMount: true,
 		},
+		{
+			name:    "no disc loaded is an error, not a mount attempt",
+			content: ContentNoDisc,
+			want:    KindUnknown,
+			wantErr: true,
+		},
+		{
+			name:    "an open tray is an error, not a mount attempt",
+			content: ContentTrayOpen,
+			want:    KindUnknown,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
