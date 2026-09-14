@@ -486,6 +486,28 @@ func TestUpdateSerializesConcurrentWriters(t *testing.T) {
 	}
 }
 
+// TestLockForCanonicalizesPath is a regression test: filepath.Clean is purely
+// lexical, so a relative and an absolute spelling of the same file used to
+// hash to two different mutexes, silently defeating Update's lost-update
+// guarantee whenever two callers derived their path strings differently.
+func TestLockForCanonicalizesPath(t *testing.T) {
+	dir := t.TempDir()
+	abs := filepath.Join(dir, "rip.manifest.json")
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer os.Chdir(wd)
+
+	if lockFor(abs) != lockFor("rip.manifest.json") {
+		t.Error("lockFor returned different mutexes for an absolute and a relative spelling of the same file")
+	}
+}
+
 // TestReadErrors checks both failure modes are distinguishable and name the file.
 func TestReadErrors(t *testing.T) {
 	dir := t.TempDir()
@@ -628,6 +650,51 @@ func TestPathAndDir(t *testing.T) {
 				t.Errorf("Path = %q, want %q", got, tc.wantPath)
 			}
 		})
+	}
+}
+
+// TestNameFallsBackToGeneratedIDWhenEmpty is a regression test: a manifest
+// built directly rather than via New — or read back from a document with no
+// "id" key — has ID == "". Path and Dir used to fall back to that empty
+// string, which joins to the root itself, putting a rip's files directly in
+// the library root and colliding every such manifest on one hidden
+// ".manifest.json". name must generate and reuse a UUID instead.
+func TestNameFallsBackToGeneratedIDWhenEmpty(t *testing.T) {
+	m := &Manifest{Disc: Disc{Type: DiscTypeBluRay}}
+	root := "/media/library/movies"
+
+	dir := Dir(root, m)
+	if dir == root {
+		t.Fatalf("Dir = %q, want a subdirectory of %q", dir, root)
+	}
+	if m.ID == "" {
+		t.Error("Dir did not fill in m.ID")
+	}
+	path := Path(root, m)
+	if filepath.Dir(path) != dir {
+		t.Errorf("Path = %q, want it inside %q", path, dir)
+	}
+
+	// A second call must reuse the same generated ID rather than minting a
+	// new one, or repeated calls for the same manifest would disagree on
+	// where it lives.
+	if got := Dir(root, m); got != dir {
+		t.Errorf("Dir on a second call = %q, want the same %q as the first", got, dir)
+	}
+}
+
+// TestSanitizeRejectsPathTraversal is a regression test: sanitize used to
+// leave "." and ".." untouched, and filepath.Join resolves rather than
+// preserves them, so a title of ".." walked the rip directory one level above
+// the configured library root.
+func TestSanitizeRejectsPathTraversal(t *testing.T) {
+	root := "/media/library/movies"
+	m := &Manifest{
+		Disc:           Disc{Type: DiscTypeBluRay},
+		Identification: Identification{Title: ".."},
+	}
+	if dir := Dir(root, m); !strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		t.Errorf("Dir = %q, escaped library root %q", dir, root)
 	}
 }
 
