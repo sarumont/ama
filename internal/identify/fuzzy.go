@@ -311,9 +311,17 @@ func TopN(ranked []RankedCandidate, n int) []RankedCandidate {
 //
 // threshold is the configured tmdb.auto_confirm_threshold. A nil threshold
 // means the operator never opted in, so confirmation is always manual; so does
-// an empty candidate list or a top score below the floor.
+// an empty candidate list or a top score below the floor. An exact tie for
+// first place is also never auto-confirmed: several normalization paths
+// (e.g. "Kill Bill Vol. 1" vs "Vol. 2", "Universal Soldier" vs "Soldier")
+// can produce two different films with identical scores, and the disc label
+// gave no signal for which one is right — the popularity tiebreak in Rank
+// picked ranked[0] arbitrarily, so a human should decide instead.
 func ShouldAutoConfirm(ranked []RankedCandidate, threshold *float64) bool {
 	if threshold == nil || len(ranked) == 0 {
+		return false
+	}
+	if len(ranked) > 1 && ranked[0].Score == ranked[1].Score {
 		return false
 	}
 	return ranked[0].Score >= *threshold

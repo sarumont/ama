@@ -460,6 +460,15 @@ func TestShouldAutoConfirm(t *testing.T) {
 			threshold: threshold(0.5),
 			want:      false,
 		},
+		{
+			// Regression: an exact tie at the top (e.g. Kill Bill Vol. 1 vs
+			// Vol. 2 before the vol-stripping fix) used to auto-confirm
+			// ranked[0] on nothing but the popularity tiebreak in Rank.
+			name:      "exact tie at the top is never auto-confirmed",
+			ranked:    []RankedCandidate{{Candidate: ironMan3, Score: 1}, {Candidate: ironMan2, Score: 1}},
+			threshold: threshold(0.5),
+			want:      false,
+		},
 	}
 
 	for _, tt := range tests {
