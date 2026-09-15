@@ -107,8 +107,8 @@ func TestWriteReplacesAtomically(t *testing.T) {
 	if got.ID != replacement.ID {
 		t.Errorf("ID = %q, want the replacement's %q", got.ID, replacement.ID)
 	}
-	if got.Tracks != nil {
-		t.Errorf("Tracks = %v, want nil — the old manifest's tracks survived", got.Tracks)
+	if len(got.Tracks) != 0 {
+		t.Errorf("Tracks = %v, want empty — the old manifest's tracks survived", got.Tracks)
 	}
 	assertOnlyFile(t, dir, "rip.manifest.json")
 }
