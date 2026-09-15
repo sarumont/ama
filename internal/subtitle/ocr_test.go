@@ -8,13 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // fakeOCRRunner stands in for ffmpeg and pgsrip: it creates the files the real
 // tools would create, records how it was called, and can be told to fail for
-// one stream so per-stream error isolation is testable.
+// one stream (or one attempted language) so per-stream error isolation and
+// the multi-language fallback are testable.
 type fakeOCRRunner struct {
 	// failExtractFor and failOCRFor are matched against the "0:N" -map value
 	// and the .sup path respectively, keyed by stream index.
@@ -23,6 +26,10 @@ type fakeOCRRunner struct {
 	// skipSRTFor names stream indexes whose pgsrip run exits cleanly without
 	// writing an SRT.
 	skipSRTFor map[int]bool
+	// failLangs names --language values that should exit cleanly without
+	// writing an SRT, regardless of stream — standing in for a language
+	// pgsrip's own filename-based filter would reject.
+	failLangs []string
 
 	calls [][]string
 }
@@ -30,10 +37,9 @@ type fakeOCRRunner struct {
 func (f *fakeOCRRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
 
-	sup := args[len(args)-1]
-	index := supStreamIndex(sup)
-
-	if slices.Contains(args, "-map") { // ffmpeg extraction
+	if i := slices.Index(args, "-map"); i >= 0 { // ffmpeg extraction
+		index, _ := strconv.Atoi(strings.TrimPrefix(args[i+1], "0:"))
+		sup := args[len(args)-1]
 		if err := f.failExtractFor[index]; err != nil {
 			return nil, err
 		}
@@ -41,6 +47,11 @@ func (f *fakeOCRRunner) Run(_ context.Context, name string, args ...string) ([]b
 	}
 
 	// pgsrip OCR
+	sup := args[len(args)-1]
+	li := slices.Index(args, "--language")
+	lang := args[li+1]
+	index := supStreamIndex(sup, lang)
+
 	if err := f.failOCRFor[index]; err != nil {
 		// pgsrip may leave a partial file behind on failure.
 		if err := os.WriteFile(srtFor(sup), []byte("partial"), 0o644); err != nil {
@@ -48,7 +59,7 @@ func (f *fakeOCRRunner) Run(_ context.Context, name string, args ...string) ([]b
 		}
 		return nil, f.failOCRFor[index]
 	}
-	if f.skipSRTFor[index] {
+	if f.skipSRTFor[index] || slices.Contains(f.failLangs, lang) {
 		return nil, nil
 	}
 	return nil, os.WriteFile(srtFor(sup), []byte("1\n"), 0o644)
@@ -69,19 +80,18 @@ func srtFor(sup string) string {
 	return strings.TrimSuffix(sup, ".sup") + ".srt"
 }
 
-// supStreamIndex recovers the stream index from a "{base}.{index}.sup" path.
-func supStreamIndex(sup string) int {
+// supStreamIndex recovers the stream index from a "{base}.{index}.{lang}.sup"
+// (or, for the raw extraction, "{base}.{index}.sup") path.
+func supStreamIndex(sup, lang string) int {
 	base := strings.TrimSuffix(filepath.Base(sup), ".sup")
+	base = strings.TrimSuffix(base, "."+lang)
 	i := strings.LastIndex(base, ".")
 	if i < 0 {
 		return -1
 	}
-	var n int
-	for _, r := range base[i+1:] {
-		if r < '0' || r > '9' {
-			return -1
-		}
-		n = n*10 + int(r-'0')
+	n, err := strconv.Atoi(base[i+1:])
+	if err != nil {
+		return -1
 	}
 	return n
 }
@@ -109,7 +119,8 @@ func TestConvertForcedCandidate(t *testing.T) {
 		NeedsOCR:              true,
 	}}
 
-	results, err := c.Convert(context.Background(), "/rips/Iron Man 3 (2013).mkv", streams)
+	mkvPath := "/rips/Iron Man 3 (2013).mkv"
+	results, err := c.Convert(context.Background(), mkvPath, streams)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
@@ -127,11 +138,18 @@ func TestConvertForcedCandidate(t *testing.T) {
 	if got.StreamIndex != 7 || got.Language != "eng" {
 		t.Errorf("got stream %d/%q, want 7/\"eng\"", got.StreamIndex, got.Language)
 	}
-	want := filepath.Join(c.TempDir, "Iron Man 3 (2013).7.srt")
-	if got.SRTPath != want {
-		t.Errorf("got SRT %q, want %q", got.SRTPath, want)
+
+	// The SRT lives directly in TempDir, and its filename must be exactly
+	// what pgsrip expects: {base}.{hash}.{index}.{lang}.srt.
+	dir := filepath.Dir(got.SRTPath)
+	if dir != c.TempDir {
+		t.Errorf("SRT %q not in TempDir %q", got.SRTPath, c.TempDir)
 	}
-	if _, err := os.Stat(want); err != nil {
+	wantName := scratchName(mkvPath, 7, "eng") + ".srt"
+	if filepath.Base(got.SRTPath) != wantName {
+		t.Errorf("got SRT name %q, want %q", filepath.Base(got.SRTPath), wantName)
+	}
+	if _, err := os.Stat(got.SRTPath); err != nil {
 		t.Errorf("SRT not left in place for muxing: %v", err)
 	}
 
@@ -141,9 +159,16 @@ func TestConvertForcedCandidate(t *testing.T) {
 			streams[0].Converted, streams[0].ConversionError)
 	}
 
-	// The .sup scratch file is cleaned up.
-	if _, err := os.Stat(filepath.Join(c.TempDir, "Iron Man 3 (2013).7.sup")); !os.IsNotExist(err) {
-		t.Errorf("sup file not cleaned up: %v", err)
+	// The .sup scratch files (raw extraction and the language-tagged copy
+	// used for OCR) are both cleaned up.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading scratch dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".sup") {
+			t.Errorf("sup file not cleaned up: %s", e.Name())
+		}
 	}
 
 	// Command construction: read-only stream copy of exactly that stream.
@@ -151,7 +176,7 @@ func TestConvertForcedCandidate(t *testing.T) {
 	if len(extract) != 1 {
 		t.Fatalf("got %d ffmpeg calls, want 1", len(extract))
 	}
-	for _, want := range [][2]string{{"-i", "/rips/Iron Man 3 (2013).mkv"}, {"-map", "0:7"}, {"-c", "copy"}} {
+	for _, want := range [][2]string{{"-i", mkvPath}, {"-map", "0:7"}, {"-c", "copy"}} {
 		i := slices.Index(extract[0], want[0])
 		if i < 0 || i+1 >= len(extract[0]) || extract[0][i+1] != want[1] {
 			t.Errorf("ffmpeg call missing %s %s: %v", want[0], want[1], extract[0])
@@ -165,8 +190,10 @@ func TestConvertForcedCandidate(t *testing.T) {
 	if i := slices.Index(ocr[0], "--language"); i < 0 || ocr[0][i+1] != "eng" {
 		t.Errorf("pgsrip call missing --language eng: %v", ocr[0])
 	}
-	if ocr[0][len(ocr[0])-1] != filepath.Join(c.TempDir, "Iron Man 3 (2013).7.sup") {
-		t.Errorf("pgsrip did not run against the extracted sup: %v", ocr[0])
+	wantSup := filepath.Join(dir, scratchName(mkvPath, 7, "eng")+".sup")
+	if ocr[0][len(ocr[0])-1] != wantSup {
+		t.Errorf("pgsrip did not run against the language-tagged sup: got %v, want last arg %q",
+			ocr[0], wantSup)
 	}
 }
 
@@ -260,9 +287,10 @@ func TestConvertIsolatesPerStreamFailures(t *testing.T) {
 	if !results[4].Converted || !results[4].Forced {
 		t.Errorf("last stream not converted with forced flags: %+v", results[4])
 	}
-	entries, err := os.ReadDir(c.TempDir)
+	dir := filepath.Dir(results[4].SRTPath)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("reading temp dir: %v", err)
+		t.Fatalf("reading scratch dir: %v", err)
 	}
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".srt") {
@@ -322,12 +350,17 @@ func TestConvertMixedStreamsOnlyOCRsBitmapTracks(t *testing.T) {
 	}
 }
 
+// TestConvertLanguageSelection exercises languagesFor's real effect end to
+// end: which language(s) pgsrip actually gets invoked with, in what order,
+// and that the fallback keeps trying until one produces a usable SRT (a
+// single pgsrip run can only ever attempt one language — see ripLanguage —
+// so "try every configured language" can only mean one run per language).
 func TestConvertLanguageSelection(t *testing.T) {
 	tests := []struct {
 		name       string
 		configured []string
 		language   string
-		want       []string
+		want       []string // languages attempted, in order
 	}{
 		{"stream language is configured", []string{"eng", "fra"}, "fra", []string{"fra"}},
 		{"stream language is not configured", []string{"eng", "fra"}, "jpn", []string{"eng", "fra"}},
@@ -336,26 +369,79 @@ func TestConvertLanguageSelection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runner := &fakeOCRRunner{}
+			runner := &fakeOCRRunner{
+				// Every attempt but the last fails, forcing the fallback to
+				// actually walk through each configured language in turn.
+				failLangs: tt.want[:len(tt.want)-1],
+			}
 			c := testConverter(t, runner)
 			c.Languages = tt.configured
 			streams := []SubtitleStream{{StreamIndex: 3, Codec: CodecPGS, Language: tt.language, NeedsOCR: true}}
 
-			if _, err := c.Convert(context.Background(), "/rips/movie.mkv", streams); err != nil {
+			results, err := c.Convert(context.Background(), "/rips/movie.mkv", streams)
+			if err != nil {
 				t.Fatalf("Convert: %v", err)
+			}
+			if !results[0].Converted {
+				t.Fatalf("expected eventual success trying %v, got %+v", tt.want, results[0])
 			}
 
 			var got []string
-			call := runner.commandsFor("pgsrip")[0]
-			for i, arg := range call {
-				if arg == "--language" {
-					got = append(got, call[i+1])
-				}
+			for _, call := range runner.commandsFor("pgsrip") {
+				i := slices.Index(call, "--language")
+				got = append(got, call[i+1])
 			}
 			if !slices.Equal(got, tt.want) {
-				t.Errorf("got languages %v, want %v", got, tt.want)
+				t.Errorf("got attempted languages %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestConvertLanguageSelectionExhausted covers every configured language
+// being rejected: Convert must report the stream as failed rather than
+// silently succeeding, and the error should be the last attempt's.
+func TestConvertLanguageSelectionExhausted(t *testing.T) {
+	runner := &fakeOCRRunner{failLangs: []string{"eng", "fra"}}
+	c := testConverter(t, runner)
+	c.Languages = []string{"eng", "fra"}
+	streams := []SubtitleStream{{StreamIndex: 3, Codec: CodecPGS, Language: LanguageUndetermined, NeedsOCR: true}}
+
+	results, err := c.Convert(context.Background(), "/rips/movie.mkv", streams)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if results[0].Converted {
+		t.Fatalf("expected failure when every language is rejected, got %+v", results[0])
+	}
+	if results[0].Error == nil || !strings.Contains(*results[0].Error, "fra") {
+		t.Errorf("got error %v, want it to mention the last attempted language", results[0].Error)
+	}
+}
+
+// TestConvertNormalizesConfiguredLanguages guards the ValidateLanguages vs.
+// Converter mismatch: a configured code like " ENG " passes ValidateLanguages
+// (see TestValidateLanguages "case and space insensitive") and must still
+// reach both languagesFor's own-language comparison and the --language flag
+// in normalized form, or a validated config breaks at rip time.
+func TestConvertNormalizesConfiguredLanguages(t *testing.T) {
+	runner := &fakeOCRRunner{}
+	c := testConverter(t, runner)
+	c.Languages = []string{" ENG "}
+	streams := []SubtitleStream{{StreamIndex: 3, Codec: CodecPGS, Language: "eng", NeedsOCR: true}}
+
+	results, err := c.Convert(context.Background(), "/rips/movie.mkv", streams)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if !results[0].Converted {
+		t.Fatalf("got %+v, want a normalized config to still convert", results[0])
+	}
+
+	call := runner.commandsFor("pgsrip")[0]
+	i := slices.Index(call, "--language")
+	if i < 0 || call[i+1] != "eng" {
+		t.Errorf("pgsrip called with %q, want normalized \"eng\"", call)
 	}
 }
 
@@ -417,6 +503,81 @@ func TestValidateLanguagesErrorNamesBundledSet(t *testing.T) {
 	}
 }
 
+// pgsripLanguageOf reimplements pgsrip's actual filename parsing (pgsrip
+// 0.1.12, pgsrip/media_path.py MediaPath.__init__):
+//
+//	file_part, extension = os.path.splitext(path)
+//	base_path, code = os.path.splitext(file_part)
+//	self.language = Language.fromcleanit(code[1:] if code else 'und')
+//
+// i.e. strip the real extension, then strip the extension of what's left —
+// that innermost piece is the language code pgsrip uses both to filter
+// --language and to pick the tesseract language. This is independent of
+// scratchName's own implementation, so it actually catches a regression to
+// the original bug (embedding the stream index as if it were the language)
+// rather than just asserting scratchName agrees with itself.
+func pgsripLanguageOf(name string) string {
+	ext := filepath.Ext(name)
+	filePart := strings.TrimSuffix(name, ext)
+	code := filepath.Ext(filePart)
+	if code == "" {
+		return LanguageUndetermined
+	}
+	return strings.TrimPrefix(code, ".")
+}
+
+func TestScratchNameSurvivesPGSRipsLanguageParsing(t *testing.T) {
+	tests := []struct {
+		name        string
+		mkvPath     string
+		streamIndex int
+		lang        string
+	}{
+		{"simple", "/rips/movie.mkv", 7, "eng"},
+		{"dotted title", "/rips/Iron Man 3 (2013).mkv", 12, "fra"},
+		{"base already has a dot", "/rips/disc.title00.mkv", 3, "jpn"},
+		{"double digit stream index", "/rips/movie.mkv", 42, "deu"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := scratchName(tt.mkvPath, tt.streamIndex, tt.lang) + ".sup"
+			if got := pgsripLanguageOf(name); got != tt.lang {
+				t.Errorf("scratchName %q: pgsrip would parse language %q, want %q", name, got, tt.lang)
+			}
+		})
+	}
+}
+
+// TestScratchNameStreamIndexIsNotMistakenForLanguage is a direct regression
+// test for the HIGH finding: the original scratchName produced
+// "{base}.{streamIndex}.sup", which pgsrip parses as language=streamIndex
+// (e.g. "7") — an invalid code that resolves to "und" and is then filtered
+// out by every --language flag ama passes, so pgsrip silently converts
+// nothing ("0 PGS subtitles collected", exit 0).
+func TestScratchNameStreamIndexIsNotMistakenForLanguage(t *testing.T) {
+	name := scratchName("/rips/movie.mkv", 7, "eng") + ".sup"
+	if got := pgsripLanguageOf(name); got == "7" || got == LanguageUndetermined {
+		t.Fatalf("scratchName %q: pgsrip would parse language %q — this is the original bug", name, got)
+	}
+	if got := pgsripLanguageOf(name); got != "eng" {
+		t.Fatalf("scratchName %q: pgsrip would parse language %q, want \"eng\"", name, got)
+	}
+}
+
+// TestScratchNameUniquePerFullSourcePath is a regression test for the
+// scratch-collision finding: MakeMKV names its output identically for every
+// disc (e.g. title_t00.mkv), so two concurrent rips into different
+// directories must not compute the same scratch name in the shared TempDir —
+// the second extraction would silently overwrite the first disc's .sup
+// mid-OCR.
+func TestScratchNameUniquePerFullSourcePath(t *testing.T) {
+	a := scratchName("/rips/DiscA/title_t00.mkv", 0, "eng")
+	b := scratchName("/rips/DiscB/title_t00.mkv", 0, "eng")
+	if a == b {
+		t.Fatalf("scratchName collided for two discs with the same basename: %q", a)
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	if got := truncate("short", 10); got != "short" {
 		t.Errorf("got %q, want %q", got, "short")
@@ -424,5 +585,20 @@ func TestTruncate(t *testing.T) {
 	got := truncate(strings.Repeat("x", 20), 10)
 	if !strings.HasPrefix(got, strings.Repeat("x", 10)) || !strings.Contains(got, "truncated") {
 		t.Errorf("got %q, want the first 10 bytes plus a truncation marker", got)
+	}
+}
+
+// TestTruncateBacksOffToRuneBoundary guards the LOW finding: truncate cut at
+// a fixed byte offset, which can split a multi-byte UTF-8 rune and produce an
+// invalid string once it's later JSON-marshalled into the sidecar.
+func TestTruncateBacksOffToRuneBoundary(t *testing.T) {
+	// "é" is the 2-byte UTF-8 sequence 0xC3 0xA9; placed at byte offset 9 so
+	// a naive cut at n=10 lands on its second byte.
+	s := strings.Repeat("x", 9) + "é" + strings.Repeat("x", 10)
+	for n := 5; n <= 12; n++ {
+		got := truncate(s, n)
+		if !utf8.ValidString(got) {
+			t.Errorf("truncate(s, %d) = %q: invalid UTF-8", n, got)
+		}
 	}
 }
