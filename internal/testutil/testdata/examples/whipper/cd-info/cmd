@@ -1,0 +1,8 @@
+# Hand-constructed sample, not captured from a real CD. Shaped after
+# whipper 0.10.0 `whipper cd info` output. The MusicBrainz disc ID and release
+# are invented; a real capture would name an actual release.
+whipper
+cd
+info
+-d
+/dev/sr0
