@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # "Latest stable" per docs/CLAUDE.md. Floor on the minor line so patch
+  # releases are picked up automatically; go.mod may declare an older minor.
+  GO_VERSION: "1.27.x"
+  GOLANGCI_LINT_VERSION: "v2.13.2"
+
+jobs:
+  ci:
+    name: lint + vet + build + test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        if: hashFiles('go.mod') != ''
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      # Every step below wraps a Makefile target so a contributor can
+      # reproduce a CI failure locally with the same one-line command.
+      # Steps are skipped while the repo has no go.mod (docs-only) so the
+      # workflow stays green until Go code lands; each starts running for
+      # real the moment go.mod is committed.
+      - name: gofmt
+        if: hashFiles('go.mod') != ''
+        run: make fmt-check
+
+      - name: golangci-lint
+        if: hashFiles('go.mod') != ''
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: go vet
+        if: hashFiles('go.mod') != ''
+        run: make vet
+
+      - name: go build
+        if: hashFiles('go.mod') != ''
+        run: make build
+
+      - name: go test
+        if: hashFiles('go.mod') != ''
+        run: make test
