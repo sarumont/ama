@@ -36,7 +36,10 @@ var ErrNotInstalled = errors.New("makemkvcon not found in PATH")
 // Track is one MakeMKV title. The fields mirror what the manifest's tracks[]
 // entries need from this layer; role classification happens in titles.go.
 type Track struct {
-	// Index is the MakeMKV title index, i.e. the tN in the output file name.
+	// Index is the MakeMKV title index (the TINFO record index), renumbered
+	// over whichever titles MakeMKV selected for this run; it does not
+	// necessarily match the tNN in the output file name. It is also the
+	// manifest's makemkv_index.
 	Index int
 	// Name is MakeMKV's title name, usually derived from the disc volume label.
 	Name string
@@ -87,13 +90,19 @@ type CommandRunner interface {
 type ExecRunner struct{}
 
 // Run executes name with args, returning whatever it wrote to stdout. A
-// non-zero exit yields a *CommandError carrying stderr.
+// non-zero exit yields a *CommandError carrying stderr, unless ctx was
+// cancelled or timed out first, in which case the returned error wraps
+// ctx.Err() so callers can tell a cancelled rip from a genuine crash with
+// errors.Is.
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return stdout.Bytes(), fmt.Errorf("%w: %v", ctxErr, err)
+		}
 		return stdout.Bytes(), &CommandError{Name: name, Stderr: stderr.String(), Err: err}
 	}
 	return stdout.Bytes(), nil
@@ -143,16 +152,26 @@ func NewClient(minLengthSeconds int) *Client {
 // A disc with no titles long enough to keep is not an error: the result is an
 // empty slice and the caller decides what that means.
 func (c *Client) Info(ctx context.Context, source string) ([]Track, error) {
-	return c.run(ctx, append(c.commonArgs(), "info", source)...)
+	tracks, _, err := c.run(ctx, append(c.commonArgs(), "info", source)...)
+	return tracks, err
 }
 
 // Rip writes every title of source into outputDir as MKV and returns the
 // tracks with OutputPath set. Streams are copied as-is; no transcoding flag is
 // ever passed.
 func (c *Client) Rip(ctx context.Context, source, outputDir string) ([]Track, error) {
-	tracks, err := c.run(ctx, append(c.commonArgs(), "mkv", source, "all", outputDir)...)
+	tracks, messages, err := c.run(ctx, append(c.commonArgs(), "mkv", source, "all", outputDir)...)
 	if err != nil {
 		return nil, err
+	}
+
+	// makemkvcon exits 0 even when some titles failed partway through a rip,
+	// leaving a truncated MKV behind for each; the only record of that is
+	// MSG:5036 ("%1 titles saved, %2 failed"). A file existing on disk is not
+	// evidence it ripped cleanly, so this has to be checked before the
+	// existence check below can be trusted.
+	if text, failed, found := partialRipFailure(messages); found && failed > 0 {
+		return nil, fmt.Errorf("makemkvcon: %s", text)
 	}
 
 	var missing []string
@@ -175,16 +194,16 @@ func (c *Client) Rip(ctx context.Context, source, outputDir string) ([]Track, er
 }
 
 // commonArgs are the options shared by every invocation: robot mode, MakeMKV's
-// own read cache, and the minimum title length.
+// own read cache (in megabytes), and the minimum title length.
 func (c *Client) commonArgs() []string {
-	args := []string{"-r", "--cache=1"}
-	if c.MinLengthSeconds > 0 {
+	args := []string{"-r", "--cache=1024"}
+	if c.MinLengthSeconds >= 0 {
 		args = append(args, "--minlength="+strconv.Itoa(c.MinLengthSeconds))
 	}
 	return args
 }
 
-func (c *Client) run(ctx context.Context, args ...string) ([]Track, error) {
+func (c *Client) run(ctx context.Context, args ...string) ([]Track, []message, error) {
 	runner := c.Runner
 	if runner == nil {
 		runner = ExecRunner{}
@@ -199,22 +218,24 @@ func (c *Client) run(ctx context.Context, args ...string) ([]Track, error) {
 
 	if runErr != nil {
 		if errors.Is(runErr, exec.ErrNotFound) {
-			return nil, fmt.Errorf("%w: %v", ErrNotInstalled, runErr)
+			return nil, nil, fmt.Errorf("%w: %v", ErrNotInstalled, runErr)
 		}
 		// Output is expected to be partial after a failure, so prefer
-		// MakeMKV's own diagnosis over a parse complaint.
+		// MakeMKV's own diagnosis over a parse complaint. parseRobotOutput
+		// returns whatever messages it accumulated before a parse error too,
+		// so this still finds MakeMKV's diagnosis on truncated output.
 		if msg, ok := firstErrorMessage(messages); ok {
-			return nil, fmt.Errorf("makemkvcon: %s: %w", msg, runErr)
+			return nil, nil, fmt.Errorf("makemkvcon: %s: %w", msg, runErr)
 		}
-		return nil, fmt.Errorf("makemkvcon: %w", runErr)
+		return nil, nil, fmt.Errorf("makemkvcon: %w", runErr)
 	}
 	if parseErr != nil {
-		return nil, fmt.Errorf("makemkvcon: parsing output: %w", parseErr)
+		return nil, nil, fmt.Errorf("makemkvcon: parsing output: %w", parseErr)
 	}
 	if msg, ok := firstErrorMessage(messages); ok {
-		return nil, fmt.Errorf("makemkvcon: %s", msg)
+		return nil, nil, fmt.Errorf("makemkvcon: %s", msg)
 	}
-	return tracks, nil
+	return tracks, messages, nil
 }
 
 // Attribute ids from AP_ItemAttributeId in apdefs.h.
@@ -249,9 +270,10 @@ const (
 
 // message is one MSG record.
 type message struct {
-	code  int
-	flags int
-	text  string
+	code   int
+	flags  int
+	text   string
+	params []string
 }
 
 // isError reports whether MakeMKV raised this message as an error dialog.
@@ -272,6 +294,28 @@ func firstErrorMessage(messages []message) (string, bool) {
 	return "", false
 }
 
+// msgTitlesSaved is MSG:5036, "%1 titles saved, %2 failed": the record
+// makemkvcon mkv emits once at the end of a rip. It is not flagged as an
+// error and the process still exits 0 even when some titles failed
+// partway through, so this is the only place a partial rip is reported.
+const msgTitlesSaved = 5036
+
+// partialRipFailure reports MSG:5036's failed-title count, if the message is
+// present. text is the message's own localized text, suitable for an error.
+func partialRipFailure(messages []message) (text string, failed int, found bool) {
+	for _, m := range messages {
+		if m.code != msgTitlesSaved || len(m.params) < 2 {
+			continue
+		}
+		n, err := strconv.Atoi(m.params[1])
+		if err != nil {
+			continue
+		}
+		return m.text, n, true
+	}
+	return "", 0, false
+}
+
 // stream accumulates the SINFO attributes of one stream.
 type stream struct {
 	index    int
@@ -290,7 +334,9 @@ type title struct {
 
 // parseRobotOutput parses makemkvcon -r output into titles and messages.
 // Unrecognized record types are ignored; a malformed record of a type we do
-// parse is an error.
+// parse is an error. On error the messages accumulated up to that point are
+// still returned, since truncated output (the common case for a failure) is
+// exactly when the caller most needs MakeMKV's own diagnosis.
 func parseRobotOutput(data []byte) ([]Track, []message, error) {
 	titles := map[int]*title{}
 	var messages []message
@@ -313,29 +359,29 @@ func parseRobotOutput(data []byte) ([]Track, []message, error) {
 
 		fields, err := splitRobotFields(rest)
 		if err != nil {
-			return nil, nil, fmt.Errorf("line %d: %s: %w", n+1, kind, err)
+			return nil, messages, fmt.Errorf("line %d: %s: %w", n+1, kind, err)
 		}
 		switch kind {
 		case "MSG":
 			msg, err := parseMessage(fields)
 			if err != nil {
-				return nil, nil, fmt.Errorf("line %d: MSG: %w", n+1, err)
+				return nil, messages, fmt.Errorf("line %d: MSG: %w", n+1, err)
 			}
 			messages = append(messages, msg)
 		case "TCOUNT":
 			if len(fields) != 1 {
-				return nil, nil, fmt.Errorf("line %d: TCOUNT: want 1 field, got %d", n+1, len(fields))
+				return nil, messages, fmt.Errorf("line %d: TCOUNT: want 1 field, got %d", n+1, len(fields))
 			}
 			if _, err := strconv.Atoi(fields[0]); err != nil {
-				return nil, nil, fmt.Errorf("line %d: TCOUNT: %w", n+1, err)
+				return nil, messages, fmt.Errorf("line %d: TCOUNT: %w", n+1, err)
 			}
 		case "TINFO":
 			if err := applyTitleInfo(titles, fields); err != nil {
-				return nil, nil, fmt.Errorf("line %d: TINFO: %w", n+1, err)
+				return nil, messages, fmt.Errorf("line %d: TINFO: %w", n+1, err)
 			}
 		case "SINFO":
 			if err := applyStreamInfo(titles, fields); err != nil {
-				return nil, nil, fmt.Errorf("line %d: SINFO: %w", n+1, err)
+				return nil, messages, fmt.Errorf("line %d: SINFO: %w", n+1, err)
 			}
 		}
 	}
@@ -356,7 +402,11 @@ func parseMessage(fields []string) (message, error) {
 	if err != nil {
 		return message{}, fmt.Errorf("flags: %w", err)
 	}
-	return message{code: code, flags: flags, text: fields[3]}, nil
+	m := message{code: code, flags: flags, text: fields[3]}
+	if len(fields) > 5 {
+		m.params = fields[5:]
+	}
+	return m, nil
 }
 
 // applyTitleInfo reads TINFO:title,attribute,code,value.
@@ -579,6 +629,14 @@ const (
 	settingsDirName  = ".MakeMKV"
 	settingsFileName = "settings.conf"
 	appKeySetting    = "app_Key"
+
+	// appDefaultSelectionSetting controls which streams makemkvcon mkv keeps.
+	// MakeMKV's built-in default profile drops audio/subtitle streams outside
+	// the favourite language, which conflicts with this project's
+	// preservation-first goal of bit-perfect MKVs, so it is pinned to "keep
+	// everything" alongside the license key.
+	appDefaultSelectionSetting = "app_DefaultSelectionString"
+	appDefaultSelectionValue   = "+sel:all"
 )
 
 // SettingsPath reports where MakeMKV keeps its settings for the current user.
@@ -591,7 +649,8 @@ func SettingsPath() (string, error) {
 }
 
 // WriteLicenseKey stores the makemkv.key config value in MakeMKV's settings
-// file, creating it if needed and leaving any other settings untouched. The
+// file, creating it if needed and leaving any other settings untouched except
+// app_DefaultSelectionString, which is pinned to keep every stream. The
 // daemon calls this once at startup; a purchased key never changes, so there is
 // no rotation here.
 func WriteLicenseKey(key string) error {
@@ -623,10 +682,13 @@ func writeLicenseKeyTo(path, key string) error {
 		return fmt.Errorf("makemkv: creating %s: %w", dir, err)
 	}
 
-	contents := setAppKey(string(existing), key)
+	contents := setSetting(string(existing), appKeySetting, key)
+	contents = setSetting(contents, appDefaultSelectionSetting, appDefaultSelectionValue)
 
 	// Write to a temp file and rename, so a crash cannot leave MakeMKV with a
-	// half-written settings file.
+	// half-written settings file. The temp file's data and the directory
+	// entry are both fsynced, since without that a crash (or power loss)
+	// around the rename can still commit an empty settings.conf on ext4.
 	tmp, err := os.CreateTemp(dir, settingsFileName+".*")
 	if err != nil {
 		return fmt.Errorf("makemkv: creating temp file in %s: %w", dir, err)
@@ -641,22 +703,35 @@ func writeLicenseKeyTo(path, key string) error {
 		tmp.Close()
 		return fmt.Errorf("makemkv: writing temp file: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("makemkv: syncing temp file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("makemkv: writing temp file: %w", err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("makemkv: replacing %s: %w", path, err)
 	}
+
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("makemkv: opening %s: %w", dir, err)
+	}
+	defer dirFile.Close()
+	if err := dirFile.Sync(); err != nil {
+		return fmt.Errorf("makemkv: syncing %s: %w", dir, err)
+	}
 	return nil
 }
 
-// setAppKey replaces the app_Key line in a settings file, or appends one.
-func setAppKey(contents, key string) string {
-	line := fmt.Sprintf("%s = %q", appKeySetting, key)
+// setSetting replaces name's line in a settings file, or appends one.
+func setSetting(contents, name, value string) string {
+	line := fmt.Sprintf("%s = %q", name, value)
 
 	lines := strings.Split(contents, "\n")
 	for i, existing := range lines {
-		if !isAppKeyLine(existing) {
+		if !isSettingLine(existing, name) {
 			continue
 		}
 		lines[i] = line
@@ -670,11 +745,11 @@ func setAppKey(contents, key string) string {
 	return trimmed + "\n" + line + "\n"
 }
 
-func isAppKeyLine(line string) bool {
+func isSettingLine(line, name string) bool {
 	rest := strings.TrimSpace(line)
-	if !strings.HasPrefix(rest, appKeySetting) {
+	if !strings.HasPrefix(rest, name) {
 		return false
 	}
-	rest = strings.TrimSpace(strings.TrimPrefix(rest, appKeySetting))
+	rest = strings.TrimSpace(strings.TrimPrefix(rest, name))
 	return strings.HasPrefix(rest, "=")
 }
