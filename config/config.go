@@ -12,8 +12,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -150,7 +152,9 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(resolved)
 	switch {
 	case err == nil:
-		if err := yaml.Unmarshal(data, cfg); err != nil {
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("config: parsing %s: %w", resolved, err)
 		}
 	case errors.Is(err, os.ErrNotExist) && !explicit:
@@ -160,7 +164,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: reading %s: %w", resolved, err)
 	}
 
-	if err := applyEnv(cfg, os.LookupEnv); err != nil {
+	if err := applyEnv(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -217,6 +221,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Disc.PollInterval < 1 {
 		fail("disc.poll_interval must be at least 1 second, got %d", c.Disc.PollInterval)
+	}
+	if c.Disc.Device == "" {
+		fail("disc.device is required")
+	}
+	if len(c.Subtitle.OCRLanguages) == 0 {
+		fail("subtitle.ocr_languages is required")
 	}
 
 	return errors.Join(errs...)
@@ -312,13 +322,21 @@ func envBindings() []envBinding {
 	}
 }
 
-// applyEnv overlays environment variables onto cfg. lookup is injected so tests
-// do not have to mutate the process environment.
-func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
+// applyEnv overlays environment variables onto cfg.
+func applyEnv(cfg *Config) error {
 	for _, b := range envBindings() {
 		for _, name := range b.names() {
-			value, ok := lookup(name)
+			value, ok := os.LookupEnv(name)
 			if !ok {
+				continue
+			}
+			// Compose interpolates an unset host variable to the empty
+			// string while still setting it, so an empty override is
+			// treated as "not configured" rather than clobbering a real
+			// file value. tmdb.auto_confirm_threshold is the documented
+			// exception: empty is how an operator explicitly clears it back
+			// to "unset".
+			if value == "" && !(b.section == "TMDB" && b.field == "AUTO_CONFIRM_THRESHOLD") {
 				continue
 			}
 			if err := b.apply(cfg, value); err != nil {
