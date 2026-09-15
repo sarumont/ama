@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -140,11 +141,15 @@ func (a *Analyzer) Analyze(ctx context.Context, mkvPath string) ([]SubtitleStrea
 		if s.CodecType != "subtitle" {
 			continue
 		}
+		size, err := a.size(ctx, mkvPath, s)
+		if err != nil {
+			return nil, fmt.Errorf("subtitle: analyzing %s: %w", mkvPath, err)
+		}
 		streams = append(streams, SubtitleStream{
 			StreamIndex:         s.Index,
 			Codec:               s.CodecName,
 			Language:            language(s.Tags),
-			SizeBytes:           a.size(ctx, mkvPath, s),
+			SizeBytes:           size,
 			ForcedFlagInSource:  s.Disposition.Forced != 0,
 			DefaultFlagInSource: s.Disposition.Default != 0,
 			HearingImpaired:     s.Disposition.HearingImpaired != 0,
@@ -228,19 +233,25 @@ func (a *Analyzer) logger() *slog.Logger {
 // size resolves a stream's payload size, preferring the NUMBER_OF_BYTES
 // statistics tag that mkvmerge (and so MakeMKV) writes. When that tag is
 // absent it falls back to summing the stream's packet sizes, which costs a
-// full read of the file. A stream whose size cannot be determined is reported
-// as 0 with a warning rather than failing the whole analysis.
-func (a *Analyzer) size(ctx context.Context, mkvPath string, s ffprobeStream) int64 {
+// full read of the file. A stream whose size cannot be determined because the
+// probe itself failed is reported as 0 with a warning rather than failing the
+// whole analysis; a size lookup cut short by ctx being cancelled is reported
+// as an error instead, since 0 would be indistinguishable from a genuine
+// empty stream.
+func (a *Analyzer) size(ctx context.Context, mkvPath string, s ffprobeStream) (int64, error) {
 	if n, ok := taggedSize(s.Tags); ok {
-		return n
+		return n, nil
 	}
 	n, err := a.packetSize(ctx, mkvPath, s.Index)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
 		a.logger().Warn("subtitle: could not determine stream size",
 			"file", mkvPath, "stream_index", s.Index, "error", err)
-		return 0
+		return 0, nil
 	}
-	return n
+	return n, nil
 }
 
 // packetSize sums the sizes of every packet belonging to one stream.
@@ -273,13 +284,16 @@ func (a *Analyzer) packetSize(ctx context.Context, mkvPath string, index int) (i
 
 // taggedSize reads the mkvmerge statistics tag, which ffprobe surfaces either
 // as NUMBER_OF_BYTES or, when the tag is language-qualified, as
-// NUMBER_OF_BYTES-eng. Tag case varies between ffprobe builds.
+// NUMBER_OF_BYTES-eng. Tag case varies between ffprobe builds. Keys are
+// visited in sorted order so that a file carrying more than one matching tag
+// (e.g. both NUMBER_OF_BYTES and NUMBER_OF_BYTES-eng) resolves the same way
+// on every run instead of depending on Go's randomized map iteration order.
 func taggedSize(tags map[string]string) (int64, bool) {
-	for k, v := range tags {
+	for _, k := range sortedTagKeys(tags) {
 		if !strings.HasPrefix(strings.ToLower(k), "number_of_bytes") {
 			continue
 		}
-		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		n, err := strconv.ParseInt(strings.TrimSpace(tags[k]), 10, 64)
 		if err != nil || n < 0 {
 			continue
 		}
@@ -289,16 +303,40 @@ func taggedSize(tags map[string]string) (int64, bool) {
 }
 
 // language reads the stream's language tag, falling back to "und" so a stream
-// with no tag is still recorded.
+// with no tag is still recorded. Keys are visited in sorted order for the
+// same reason as taggedSize: more than one matching key (e.g. "language" and
+// "LANGUAGE" both present) must resolve the same way on every run.
 func language(tags map[string]string) string {
-	for k, v := range tags {
+	for _, k := range sortedTagKeys(tags) {
 		if strings.EqualFold(k, "language") {
-			if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
+			if v := strings.ToLower(strings.TrimSpace(tags[k])); v != "" {
 				return v
 			}
 		}
 	}
 	return LanguageUndetermined
+}
+
+// sortedTagKeys returns tags' keys in a fixed order (case-insensitive) so
+// callers can look up ambiguous/duplicate tags deterministically instead of
+// relying on Go's randomized map iteration order.
+func sortedTagKeys(tags map[string]string) []string {
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		li, lj := strings.ToLower(keys[i]), strings.ToLower(keys[j])
+		if li != lj {
+			return li < lj
+		}
+		// Keys that differ only by case (e.g. "language" vs "LANGUAGE") tie
+		// under the case-insensitive comparison above; break the tie on the
+		// exact key so the order is still fixed rather than left to
+		// sort.Slice's unstable ordering of equal elements.
+		return keys[i] < keys[j]
+	})
+	return keys
 }
 
 // ffprobeOutput is the subset of `ffprobe -show_streams -print_format json`
