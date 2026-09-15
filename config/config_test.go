@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -116,6 +117,11 @@ func TestLoadYAML(t *testing.T) {
 			name:    "malformed yaml is an error",
 			yaml:    "web:\n\tport: nope\n",
 			wantErr: "parsing",
+		},
+		{
+			name:    "unknown key is an error",
+			yaml:    "subtitle:\n  forced_ratio: 0.05\n",
+			wantErr: "forced_ratio",
 		},
 	}
 
@@ -326,6 +332,15 @@ func TestEnvOverrides(t *testing.T) {
 			env:     map[string]string{"AMA_RADARR_ENABLED": "yes-please"},
 			wantErr: "AMA_RADARR_ENABLED",
 		},
+		{
+			name: "empty override does not clobber the file value",
+			env:  map[string]string{"AMA_MAKEMKV_KEY": ""},
+			check: func(t *testing.T, c *Config) {
+				if c.MakeMKV.Key != "mk-license" {
+					t.Errorf("makemkv.key = %q, want the file value", c.MakeMKV.Key)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -521,6 +536,26 @@ func TestValidate(t *testing.T) {
 			name:    "auto confirm threshold out of range",
 			mutate:  func(c *Config) { c.TMDB.AutoConfirmThreshold = floatPtr(1.5) },
 			wantErr: []string{"tmdb.auto_confirm_threshold"},
+		},
+		{
+			name:    "auto confirm threshold NaN",
+			mutate:  func(c *Config) { c.TMDB.AutoConfirmThreshold = floatPtr(math.NaN()) },
+			wantErr: []string{"tmdb.auto_confirm_threshold"},
+		},
+		{
+			name:    "forced ratio threshold NaN",
+			mutate:  func(c *Config) { c.Subtitle.ForcedRatioThreshold = math.NaN() },
+			wantErr: []string{"subtitle.forced_ratio_threshold"},
+		},
+		{
+			name:    "empty disc device",
+			mutate:  func(c *Config) { c.Disc.Device = "" },
+			wantErr: []string{"disc.device"},
+		},
+		{
+			name:    "empty ocr languages",
+			mutate:  func(c *Config) { c.Subtitle.OCRLanguages = nil },
+			wantErr: []string{"subtitle.ocr_languages"},
 		},
 		{
 			name:    "empty output paths",
