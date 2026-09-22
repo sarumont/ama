@@ -226,16 +226,17 @@ func TestDetectKind(t *testing.T) {
 			t.Parallel()
 
 			mounted, released := false, false
-			mount := func(string) (string, func() error, error) {
+			mount := func(string) (string, bool, func() error, error) {
 				mounted = true
 				if tt.mountErr != nil {
-					return "", nil, tt.mountErr
+					return "", false, nil, tt.mountErr
 				}
-				return mountLayout(t, tt.entries...), func() error { released = true; return nil }, nil
+				return mountLayout(t, tt.entries...), false, func() error { released = true; return nil }, nil
 			}
 
 			checker := fakeContentChecker{content: tt.content, err: tt.checkErr}
-			got, err := detectKind(testDevice, checker, mount)
+			disc, err := detect(testDevice, checker, mount)
+			got := disc.Kind
 
 			if got != tt.want {
 				t.Errorf("kind = %v, want %v", got, tt.want)
@@ -249,12 +250,47 @@ func TestDetectKind(t *testing.T) {
 			if mounted != tt.wantMount {
 				t.Errorf("mounted = %v, want %v", mounted, tt.wantMount)
 			}
+			// detect itself never releases: the caller owns disc.Release and
+			// must call it, whether or not it looks at disc.Root first.
+			if released {
+				t.Error("detect must not release the mount itself")
+			}
+			if rerr := disc.Release(); rerr != nil {
+				t.Errorf("Release: %v", rerr)
+			}
 			// Every successful mount must be released, or the daemon leaks a
 			// mount point per disc and the drive will not eject.
 			if wantRelease := tt.wantMount && tt.mountErr == nil; released != wantRelease {
-				t.Errorf("released = %v, want %v", released, wantRelease)
+				t.Errorf("released after disc.Release() = %v, want %v", released, wantRelease)
 			}
 		})
+	}
+}
+
+func TestDetectReused(t *testing.T) {
+	t.Parallel()
+
+	// A foreign mount — something outside AMA, such as a desktop automounter,
+	// already had the device mounted — must be surfaced as Reused so the
+	// caller knows Release is a no-op (mountReadOnly's contract: a reused
+	// mount's release never unmounts) and Eject may need different handling.
+	mount := func(string) (string, bool, func() error, error) {
+		return mountLayout(t, "BDMV/"), true, func() error { return nil }, nil
+	}
+
+	checker := fakeContentChecker{content: ContentData1}
+	disc, err := detect(testDevice, checker, mount)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if !disc.Reused {
+		t.Error("Reused = false, want true for a foreign mount")
+	}
+	if disc.Kind != KindBluRay {
+		t.Errorf("kind = %v, want %v", disc.Kind, KindBluRay)
+	}
+	if err := disc.Release(); err != nil {
+		t.Errorf("Release: %v", err)
 	}
 }
 
@@ -263,20 +299,24 @@ func TestDetectKindReleaseError(t *testing.T) {
 
 	// A successful examination whose release fails must still report the
 	// kind it found — the disc was identified, it just did not come loose —
-	// alongside an error naming the failed release.
+	// alongside an error naming the failed release. DetectKind is the
+	// convenience wrapper that releases on the caller's behalf, so this is
+	// exercised through it rather than through detect/Detect directly.
 	errRelease := errors.New("target is busy")
-	mount := func(string) (string, func() error, error) {
-		return mountLayout(t, "BDMV/"), func() error { return errRelease }, nil
+	mount := func(string) (string, bool, func() error, error) {
+		return mountLayout(t, "BDMV/"), false, func() error { return errRelease }, nil
 	}
 
 	checker := fakeContentChecker{content: ContentData1}
-	got, err := detectKind(testDevice, checker, mount)
-
-	if got != KindBluRay {
-		t.Errorf("kind = %v, want %v", got, KindBluRay)
+	disc, detectErr := detect(testDevice, checker, mount)
+	if detectErr != nil {
+		t.Fatalf("detect: %v", detectErr)
 	}
-	if !errors.Is(err, errRelease) {
-		t.Errorf("error = %v, want it to wrap %v", err, errRelease)
+	if disc.Kind != KindBluRay {
+		t.Errorf("kind = %v, want %v", disc.Kind, KindBluRay)
+	}
+	if err := disc.Release(); !errors.Is(err, errRelease) {
+		t.Errorf("Release: %v, want it to wrap %v", err, errRelease)
 	}
 }
 
@@ -287,6 +327,14 @@ func TestDetectKindMissingDevice(t *testing.T) {
 	// is not there.
 	if _, err := DetectKind(testDevice, nil); err == nil {
 		t.Error("DetectKind on a missing device returned no error")
+	}
+}
+
+func TestDetectMissingDevice(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Detect(testDevice, nil); err == nil {
+		t.Error("Detect on a missing device returned no error")
 	}
 }
 

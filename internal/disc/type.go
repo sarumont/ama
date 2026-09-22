@@ -158,13 +158,49 @@ func (IoctlContentChecker) Content(device string) (DiscContent, error) {
 }
 
 // mounter makes the contents of a device readable at a path and returns a
-// release function that undoes whatever it did. The release function reports
-// whether that cleanup succeeded; a failed unmount leaves the disc stuck in
-// the drive.
-type mounter func(device string) (root string, release func() error, err error)
+// release function that undoes whatever it did, and whether the mount was
+// reused rather than made by this call. The release function reports whether
+// cleanup succeeded; a failed unmount leaves the disc stuck in the drive.
+type mounter func(device string) (root string, reused bool, release func() error, err error)
 
-// DetectKind reports what kind of disc is in device. A nil checker selects
-// IoctlContentChecker.
+// noRelease is a MountedDisc.Release for a kind that was never mounted:
+// KindCD (no filesystem exists to mount), or a classification reached before
+// or without a successful mount.
+func noRelease() error { return nil }
+
+// MountedDisc is the result of examining a device: the kind of disc found,
+// and — for a data disc — the mount that was read to find out, held open so
+// the caller can look inside it further before deciding what to do.
+//
+// bluray.ReadDiscInfo (docs/ARCHITECTURE.md step 3) reads BDMV/META/DL XML
+// from exactly this Root, so a caller identifying a KindBluRay disc mounts it
+// exactly once: Detect for the kind, then ReadDiscInfo(disc.Root) against the
+// same mount, then Release when done with both.
+type MountedDisc struct {
+	// Kind is what the disc turned out to be.
+	Kind DiscKind
+	// Root is where the disc's filesystem is readable, for KindBluRay and
+	// KindDVD. Empty for KindCD (there is no filesystem to mount) and for a
+	// KindUnknown reached without a successful mount.
+	Root string
+	// Reused is true when Root is a mount this call did not create — something
+	// outside AMA, such as a desktop automounter, already had the device
+	// mounted there. Release is then a no-op: AMA must not unmount a mount it
+	// does not own. A caller that means to Eject the disc needs to check this
+	// first — CDROMEJECT is refused with EBUSY while anything is mounted on
+	// the device, foreign or not, and unmounting someone else's mount to force
+	// the eject through is a policy decision for the caller to make, not this
+	// package's to make for them.
+	Reused bool
+	// Release undoes whatever Detect did to produce Root: unmounting and
+	// removing the temporary mount point, unless Reused is true. Always
+	// non-nil and safe to call exactly once, even when Root is empty.
+	Release func() error
+}
+
+// DetectKind reports what kind of disc is in device and releases the mount
+// immediately, for a caller that only needs the kind and never looks inside
+// the volume itself. A nil checker selects IoctlContentChecker.
 //
 // A non-nil error means the disc could not be examined — the drive would not
 // answer, or reported no disc loaded or an open tray. That is distinct from a
@@ -181,50 +217,72 @@ type mounter func(device string) (root string, release func() error, err error)
 // releasing the mount afterwards fails, DetectKind still returns the kind it
 // found, but with a non-nil error reporting the failed release. The disc is
 // still identified; it is just still mounted.
+//
+// A caller that needs the mount root too — to read BDMV/META/DL XML off a
+// Blu-ray before deciding what to do with it — wants Detect instead, which
+// leaves the mount open for the caller to Release explicitly.
 func DetectKind(device string, checker ContentChecker) (DiscKind, error) {
+	disc, err := Detect(device, checker)
+	if rerr := disc.Release(); rerr != nil {
+		err = errors.Join(err, fmt.Errorf("release mount %s: %w", disc.Root, rerr))
+	}
+	return disc.Kind, err
+}
+
+// Detect examines device and returns a MountedDisc describing what was found.
+// A nil checker selects IoctlContentChecker.
+//
+// The mount, if any, is left open: the caller owns disc.Release and must call
+// it exactly once when done, whatever it goes on to do with disc.Root in the
+// meantime. See MountedDisc for what a non-nil Root, a true Reused, and a
+// failed Release mean.
+//
+// The error and KindUnknown cases follow the same rules as DetectKind's doc
+// comment.
+func Detect(device string, checker ContentChecker) (MountedDisc, error) {
 	if checker == nil {
 		checker = IoctlContentChecker{}
 	}
-	return detectKind(device, checker, mountReadOnly)
+	return detect(device, checker, mountReadOnly)
 }
 
-// detectKind is DetectKind with the mount step injected, so tests can drive the
+// detect is Detect with the mount step injected, so tests can drive the
 // data-disc path without root or a real drive.
-func detectKind(device string, checker ContentChecker, mount mounter) (kind DiscKind, err error) {
+func detect(device string, checker ContentChecker, mount mounter) (MountedDisc, error) {
 	content, err := checker.Content(device)
 	if err != nil {
-		return KindUnknown, fmt.Errorf("disc content %s: %w", device, err)
+		return MountedDisc{Release: noRelease}, fmt.Errorf("disc content %s: %w", device, err)
 	}
 
 	// Audio first, and without mounting: a CDDA disc has no filesystem, so a
 	// mount attempt fails and would turn a perfectly good CD into an error.
 	// Mixed mode counts as a CD — the audio tracks are what gets archived.
 	if content == ContentAudio || content == ContentMixed {
-		return KindCD, nil
+		return MountedDisc{Kind: KindCD, Release: noRelease}, nil
 	}
 
 	// Neither of these is "examined, nothing we handle" — the disc was not
 	// examined at all. A caller that just saw an insertion event can hit
-	// ContentNoDisc if DetectKind runs before the drive has settled.
+	// ContentNoDisc if Detect runs before the drive has settled.
 	if content == ContentNoDisc || content == ContentTrayOpen {
-		return KindUnknown, fmt.Errorf("disc content %s: %s", device, content)
+		return MountedDisc{Release: noRelease}, fmt.Errorf("disc content %s: %s", device, content)
 	}
 
-	root, release, err := mount(device)
+	root, reused, release, err := mount(device)
 	if err != nil {
 		// A mount failure here is what a blank or malformed volume looks
 		// like: the drive said "data disc" but neither udf nor iso9660 can
 		// read a filesystem off it. That is examined-and-unhandled, not a
 		// failed examination.
-		return KindUnknown, nil
+		return MountedDisc{Release: noRelease}, nil
 	}
-	defer func() {
-		if rerr := release(); rerr != nil {
-			err = errors.Join(err, fmt.Errorf("release mount %s: %w", root, rerr))
-		}
-	}()
 
-	return KindFromMount(root), nil
+	return MountedDisc{
+		Kind:    KindFromMount(root),
+		Root:    root,
+		Reused:  reused,
+		Release: release,
+	}, nil
 }
 
 // KindFromMount reports the kind of the disc mounted at root, by looking for
@@ -278,14 +336,14 @@ func isDir(root string, e os.DirEntry) bool {
 //
 // Mounting needs CAP_SYS_ADMIN, which the container is expected to carry along
 // with the passed-through device.
-func mountReadOnly(device string) (string, func() error, error) {
+func mountReadOnly(device string) (string, bool, func() error, error) {
 	if root, ok := existingMount(device); ok {
-		return root, func() error { return nil }, nil
+		return root, true, func() error { return nil }, nil
 	}
 
 	dir, err := os.MkdirTemp("", "ama-disc-")
 	if err != nil {
-		return "", nil, fmt.Errorf("temp mount point: %w", err)
+		return "", false, nil, fmt.Errorf("temp mount point: %w", err)
 	}
 
 	// udf first: every Blu-ray and every video DVD is UDF. iso9660 covers the
@@ -294,7 +352,7 @@ func mountReadOnly(device string) (string, func() error, error) {
 	for _, fstype := range []string{"udf", "iso9660"} {
 		err := syscall.Mount(device, dir, fstype, syscall.MS_RDONLY|syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "")
 		if err == nil {
-			return dir, func() error {
+			return dir, false, func() error {
 				var relErrs []error
 				if err := syscall.Unmount(dir, 0); err != nil {
 					relErrs = append(relErrs, fmt.Errorf("unmount %s: %w", dir, err))
@@ -309,7 +367,7 @@ func mountReadOnly(device string) (string, func() error, error) {
 	}
 
 	_ = os.Remove(dir)
-	return "", nil, errors.Join(errs...)
+	return "", false, nil, errors.Join(errs...)
 }
 
 // existingMount returns the mount point device is already mounted on, if any.
