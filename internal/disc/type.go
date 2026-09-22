@@ -148,7 +148,7 @@ func (IoctlContentChecker) Content(device string) (DiscContent, error) {
 	if err != nil {
 		return ContentNoInfo, fmt.Errorf("open %s: %w", device, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	content, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), cdromDiscStatus, 0)
 	if errno != 0 {
@@ -308,7 +308,7 @@ func mountReadOnly(device string) (string, func() error, error) {
 		errs = append(errs, fmt.Errorf("%s: %w", fstype, err))
 	}
 
-	os.Remove(dir)
+	_ = os.Remove(dir)
 	return "", nil, errors.Join(errs...)
 }
 
