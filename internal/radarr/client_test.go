@@ -117,17 +117,14 @@ func writeStatus(status int, body string) http.HandlerFunc {
 	}
 }
 
-const qualityProfiles = `[{"id":4,"name":"HD-1080p"},{"id":2,"name":"Any"},{"id":7,"name":"Ultra-HD"}]`
-
 func TestRadarrAddMovie(t *testing.T) {
 	fake := newFakeArr(t, map[string]http.HandlerFunc{
-		"/api/v3/qualityprofile": writeJSON(qualityProfiles),
-		"/api/v3/movie/lookup":   writeJSON(`[{"title":"Iron Man 3","year":2013,"tmdbId":68721,"titleSlug":"iron-man-3-68721"}]`),
-		"/api/v3/movie":          writeStatus(http.StatusCreated, `{"id":41,"title":"Iron Man 3"}`),
+		"/api/v3/movie/lookup": writeJSON(`[{"title":"Iron Man 3","year":2013,"tmdbId":68721,"titleSlug":"iron-man-3-68721"}]`),
+		"/api/v3/movie":        writeStatus(http.StatusCreated, `{"id":41,"title":"Iron Man 3"}`),
 	})
 
 	client := NewRadarr(fake.config(), fake.client())
-	got, err := client.AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/media/library/movies"})
+	got, err := client.AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/media/library/movies", QualityProfileID: 2})
 	if err != nil {
 		t.Fatalf("AddMovie: %v", err)
 	}
@@ -162,7 +159,6 @@ func TestRadarrAddMovie(t *testing.T) {
 	if post.body["rootFolderPath"] != "/media/library/movies" {
 		t.Errorf("add body rootFolderPath = %v", post.body["rootFolderPath"])
 	}
-	// Lowest-numbered profile from the instance, not a hardcoded 1.
 	if post.body["qualityProfileId"] != float64(2) {
 		t.Errorf("add body qualityProfileId = %v, want 2", post.body["qualityProfileId"])
 	}
@@ -180,13 +176,12 @@ func TestRadarrAddMovie(t *testing.T) {
 
 func TestSonarrAddSeries(t *testing.T) {
 	fake := newFakeArr(t, map[string]http.HandlerFunc{
-		"/api/v3/qualityprofile": writeJSON(qualityProfiles),
-		"/api/v3/series/lookup":  writeJSON(`[{"title":"Breaking Bad","tvdbId":81189,"titleSlug":"breaking-bad"}]`),
-		"/api/v3/series":         writeStatus(http.StatusCreated, `{"id":9,"title":"Breaking Bad"}`),
+		"/api/v3/series/lookup": writeJSON(`[{"title":"Breaking Bad","tvdbId":81189,"titleSlug":"breaking-bad"}]`),
+		"/api/v3/series":        writeStatus(http.StatusCreated, `{"id":9,"title":"Breaking Bad"}`),
 	})
 
 	client := NewSonarr(fake.config(), fake.client())
-	got, err := client.AddSeries(t.Context(), 81189, AddOptions{RootFolderPath: "/media/library/tv"})
+	got, err := client.AddSeries(t.Context(), 81189, AddOptions{RootFolderPath: "/media/library/tv", QualityProfileID: 2, LanguageProfileID: 3})
 	if err != nil {
 		t.Fatalf("AddSeries: %v", err)
 	}
@@ -214,8 +209,8 @@ func TestSonarrAddSeries(t *testing.T) {
 	if post.body["seasonFolder"] != true {
 		t.Errorf("add body seasonFolder = %v, want true", post.body["seasonFolder"])
 	}
-	if post.body["languageProfileId"] != float64(1) {
-		t.Errorf("add body languageProfileId = %v, want 1", post.body["languageProfileId"])
+	if post.body["languageProfileId"] != float64(3) {
+		t.Errorf("add body languageProfileId = %v, want 3", post.body["languageProfileId"])
 	}
 	addOptions, ok := post.body["addOptions"].(map[string]any)
 	if !ok {
@@ -223,28 +218,6 @@ func TestSonarrAddSeries(t *testing.T) {
 	}
 	if addOptions["searchForMissingEpisodes"] != false {
 		t.Errorf("add body addOptions.searchForMissingEpisodes = %v, want false", addOptions["searchForMissingEpisodes"])
-	}
-}
-
-func TestAddExplicitQualityProfileSkipsLookup(t *testing.T) {
-	fake := newFakeArr(t, map[string]http.HandlerFunc{
-		"/api/v3/movie/lookup": writeJSON(`[{"title":"Arrival","tmdbId":329865}]`),
-		"/api/v3/movie":        writeStatus(http.StatusCreated, `{"id":3}`),
-	})
-
-	client := NewRadarr(fake.config(), fake.client())
-	if _, err := client.AddMovie(t.Context(), 329865, AddOptions{
-		RootFolderPath:   "/movies",
-		QualityProfileID: 6,
-	}); err != nil {
-		t.Fatalf("AddMovie: %v", err)
-	}
-
-	if n := fake.requestCount("/api/v3/qualityprofile"); n != 0 {
-		t.Errorf("quality profile requests = %d, want 0", n)
-	}
-	if got := fake.request("/api/v3/movie").body["qualityProfileId"]; got != float64(6) {
-		t.Errorf("qualityProfileId = %v, want 6", got)
 	}
 }
 
@@ -281,7 +254,7 @@ func TestAddAlreadyExists(t *testing.T) {
 			body:         `[{"propertyName":"TvdbId","errorMessage":"This series has already been added","severity":"error"}]`,
 			add: func(t *testing.T, f *fakeArr) (AddResult, error) {
 				return NewSonarr(f.config(), f.client()).
-					AddSeries(t.Context(), 81189, AddOptions{RootFolderPath: "/tv", QualityProfileID: 1})
+					AddSeries(t.Context(), 81189, AddOptions{RootFolderPath: "/tv", QualityProfileID: 1, LanguageProfileID: 1})
 			},
 		},
 		{
@@ -358,13 +331,13 @@ func TestAuthFailure(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeArr(t, map[string]http.HandlerFunc{
-				"/api/v3/qualityprofile": writeStatus(tc.status, `{"error":"Unauthorized"}`),
-				"/api/v3/command":        writeStatus(tc.status, `{"error":"Unauthorized"}`),
+				"/api/v3/movie/lookup": writeStatus(tc.status, `{"error":"Unauthorized"}`),
+				"/api/v3/command":      writeStatus(tc.status, `{"error":"Unauthorized"}`),
 			})
 
 			client := NewRadarr(config.Arr{URL: fake.server.URL, APIKey: "wrong"}, fake.client())
 
-			if _, err := client.AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/movies"}); !errors.Is(err, ErrUnauthorized) {
+			if _, err := client.AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/movies", QualityProfileID: 1}); !errors.Is(err, ErrUnauthorized) {
 				t.Errorf("AddMovie error = %v, want ErrUnauthorized", err)
 			}
 			if err := client.TriggerImportScan(t.Context(), "/movies/Iron Man 3 (2013)"); !errors.Is(err, ErrUnauthorized) {
@@ -515,12 +488,11 @@ func TestAddNoLookupMatch(t *testing.T) {
 // the wrong title.
 func TestAddLookupIDMismatchIsAnError(t *testing.T) {
 	fake := newFakeArr(t, map[string]http.HandlerFunc{
-		"/api/v3/qualityprofile": writeJSON(qualityProfiles),
-		"/api/v3/movie/lookup":   writeJSON(`[{"title":"Iron Man","tmdbId":1726}]`),
+		"/api/v3/movie/lookup": writeJSON(`[{"title":"Iron Man","tmdbId":1726}]`),
 	})
 
 	client := NewRadarr(fake.config(), fake.client())
-	_, err := client.AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/movies"})
+	_, err := client.AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/movies", QualityProfileID: 1})
 	if err == nil {
 		t.Fatal("want an error when the lookup returns a different tmdb id, got nil")
 	}
@@ -552,18 +524,29 @@ func TestAddPathCollisionIsNotAlreadyExists(t *testing.T) {
 	}
 }
 
-func TestNoQualityProfilesConfigured(t *testing.T) {
-	fake := newFakeArr(t, map[string]http.HandlerFunc{
-		"/api/v3/qualityprofile": writeJSON(`[]`),
-	})
+func TestAddRequiresQualityProfileID(t *testing.T) {
+	fake := newFakeArr(t, map[string]http.HandlerFunc{})
 
 	client := NewRadarr(fake.config(), fake.client())
 	_, err := client.AddMovie(t.Context(), 68721, AddOptions{RootFolderPath: "/movies"})
 	if err == nil {
-		t.Fatal("want an error when the instance has no quality profiles, got nil")
+		t.Fatal("AddMovie: want an error without a quality profile id, got nil")
 	}
 	if !strings.Contains(err.Error(), "QualityProfileID") {
 		t.Errorf("error = %q, want it to point at AddOptions.QualityProfileID", err)
+	}
+}
+
+func TestAddSeriesRequiresLanguageProfileID(t *testing.T) {
+	fake := newFakeArr(t, map[string]http.HandlerFunc{})
+
+	client := NewSonarr(fake.config(), fake.client())
+	_, err := client.AddSeries(t.Context(), 81189, AddOptions{RootFolderPath: "/tv", QualityProfileID: 1})
+	if err == nil {
+		t.Fatal("AddSeries: want an error without a language profile id, got nil")
+	}
+	if !strings.Contains(err.Error(), "language profile id") {
+		t.Errorf("error = %q, want it to mention the language profile id", err)
 	}
 }
 

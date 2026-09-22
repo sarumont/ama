@@ -74,10 +74,15 @@ type AddOptions struct {
 	// under. Required: neither service accepts an add without one, and there is
 	// no safe default to guess.
 	RootFolderPath string
-	// QualityProfileID selects the quality profile. Zero means "resolve the
-	// lowest-numbered profile the service has", which avoids hardcoding an ID
-	// that only happens to be right on one instance.
+	// QualityProfileID selects the quality profile. Required: neither service
+	// accepts an add without one, and profile IDs are per-instance, so there is
+	// no default AMA can guess that is safe. Guessing risks silently importing
+	// a Blu-ray remux into a profile that will reject it (see #38 review).
 	QualityProfileID int
+	// LanguageProfileID selects the language profile. Required by AddSeries;
+	// Sonarr v3 validates it and there is no safe default to guess, for the
+	// same reason as QualityProfileID. AddMovie ignores it.
+	LanguageProfileID int
 }
 
 // AddResult describes the outcome of an add.
@@ -151,6 +156,9 @@ func (c *Sonarr) AddSeries(ctx context.Context, tvdbID int, opts AddOptions) (Ad
 	if tvdbID <= 0 {
 		return AddResult{}, fmt.Errorf("sonarr: add series: tvdb id must be positive, got %d", tvdbID)
 	}
+	if opts.LanguageProfileID == 0 {
+		return AddResult{}, fmt.Errorf("sonarr: add series: language profile id is required")
+	}
 	return c.add(ctx, addSpec{
 		op:           "add series",
 		lookupPath:   "/api/v3/series/lookup",
@@ -162,8 +170,8 @@ func (c *Sonarr) AddSeries(ctx context.Context, tvdbID int, opts AddOptions) (Ad
 		fields: map[string]any{
 			"seasonFolder": true,
 			// Sonarr v3.0 requires a language profile; v4 dropped the concept
-			// and ignores the field. Sending 1 satisfies both.
-			"languageProfileId": 1,
+			// and ignores the field, so sending it is harmless either way.
+			"languageProfileId": opts.LanguageProfileID,
 			"addOptions":        map[string]any{"searchForMissingEpisodes": false},
 		},
 	}, opts)
@@ -226,13 +234,8 @@ func (a arr) add(ctx context.Context, spec addSpec, opts AddOptions) (AddResult,
 	if opts.RootFolderPath == "" {
 		return AddResult{}, fmt.Errorf("%s: %s: root folder path is required", a.app, spec.op)
 	}
-
-	profileID := opts.QualityProfileID
-	if profileID == 0 {
-		var err error
-		if profileID, err = a.defaultQualityProfileID(ctx, spec.op); err != nil {
-			return AddResult{}, err
-		}
+	if opts.QualityProfileID == 0 {
+		return AddResult{}, fmt.Errorf("%s: %s: quality profile id is required, set AddOptions.QualityProfileID", a.app, spec.op)
 	}
 
 	var found []map[string]any
@@ -253,7 +256,7 @@ func (a arr) add(ctx context.Context, spec addSpec, opts AddOptions) (AddResult,
 		return AddResult{}, fmt.Errorf("%s: %s: lookup for %s returned a different item (%v)", a.app, spec.op, spec.subject, resource["title"])
 	}
 	resource["rootFolderPath"] = opts.RootFolderPath
-	resource["qualityProfileId"] = profileID
+	resource["qualityProfileId"] = opts.QualityProfileID
 	resource["monitored"] = true
 	for k, v := range spec.fields {
 		resource[k] = v
@@ -303,29 +306,6 @@ func (a arr) command(ctx context.Context, op, name, path string) error {
 		return a.httpError(op, status, body)
 	}
 	return nil
-}
-
-// defaultQualityProfileID returns the lowest-numbered profile on the instance.
-// Profile IDs are per-instance, so there is no correct constant to hardcode;
-// picking deterministically from the service's own list at least fails loudly
-// when an instance has no profiles at all.
-func (a arr) defaultQualityProfileID(ctx context.Context, op string) (int, error) {
-	var profiles []struct {
-		ID int `json:"id"`
-	}
-	if err := a.getJSON(ctx, op, "/api/v3/qualityprofile", nil, &profiles); err != nil {
-		return 0, err
-	}
-	best := 0
-	for _, p := range profiles {
-		if p.ID > 0 && (best == 0 || p.ID < best) {
-			best = p.ID
-		}
-	}
-	if best == 0 {
-		return 0, fmt.Errorf("%s: %s: no quality profiles configured, set AddOptions.QualityProfileID", a.app, op)
-	}
-	return best, nil
 }
 
 func (a arr) getJSON(ctx context.Context, op, path string, query url.Values, out any) error {
