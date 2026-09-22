@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,35 +78,74 @@ type AudioTrack struct {
 	HasCommentaryFlag bool
 }
 
-// CommandRunner runs an external command to completion and returns its standard
-// output. It exists so tests can replace makemkvcon with recorded output; every
-// AMA wrapper around an external tool should take one of these rather than
-// calling os/exec directly.
+// CommandRunner runs an external command to completion, invoking onLine for
+// every line it writes to stdout as the line arrives (without its trailing
+// newline), so a long-running command — a multi-hour rip — can surface
+// progress before it exits. It exists so tests can replay recorded output
+// instead of shelling out; every AMA wrapper around an external tool should
+// take one of these rather than calling os/exec directly.
+//
+// If onLine returns an error, Run stops feeding it further lines and returns
+// that error. This does not itself kill the subprocess — callers that need
+// that should cancel ctx from within onLine.
 type CommandRunner interface {
-	Run(ctx context.Context, name string, args ...string) (stdout []byte, err error)
+	Run(ctx context.Context, name string, onLine func(line []byte) error, args ...string) error
 }
 
 // ExecRunner is the real CommandRunner. The subprocess is killed when ctx is
 // cancelled, which is what stops a long rip.
 type ExecRunner struct{}
 
-// Run executes name with args, returning whatever it wrote to stdout. A
+// Run executes name with args, calling onLine as it produces output. A
 // non-zero exit yields a *CommandError carrying stderr, unless ctx was
 // cancelled or timed out first, in which case the returned error wraps
 // ctx.Err() so callers can tell a cancelled rip from a genuine crash with
-// errors.Is.
-func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	var stdout, stderr bytes.Buffer
+// errors.Is. A process that exits cleanly but hands onLine a line it
+// rejects returns onLine's own error instead.
+func (ExecRunner) Run(ctx context.Context, name string, onLine func(line []byte) error, args ...string) error {
+	var stderr bytes.Buffer
+	lw := &lineWriter{onLine: onLine}
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stdout = &stdout
+	cmd.Stdout = lw
 	cmd.Stderr = &stderr
+
 	if err := cmd.Run(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return stdout.Bytes(), fmt.Errorf("%w: %v", ctxErr, err)
+			return fmt.Errorf("%w: %v", ctxErr, err)
 		}
-		return stdout.Bytes(), &CommandError{Name: name, Stderr: stderr.String(), Err: err}
+		return &CommandError{Name: name, Stderr: stderr.String(), Err: err}
 	}
-	return stdout.Bytes(), nil
+	return lw.err
+}
+
+// lineWriter is an io.Writer that splits whatever it is given on '\n' and
+// invokes onLine per complete line, buffering a partial trailing line across
+// writes. Once onLine returns an error, lineWriter stops calling it and
+// discards everything written afterward.
+type lineWriter struct {
+	onLine func([]byte) error
+	buf    []byte
+	err    error
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return len(p), nil
+	}
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			break
+		}
+		line := w.buf[:i]
+		w.buf = w.buf[i+1:]
+		if err := w.onLine(line); err != nil {
+			w.err = err
+			break
+		}
+	}
+	return len(p), nil
 }
 
 // CommandError reports a command that failed to run or exited non-zero, with
@@ -126,15 +166,35 @@ func (e *CommandError) Error() string {
 
 func (e *CommandError) Unwrap() error { return e.Err }
 
+// Progress reports rip progress derived from MakeMKV's PRGC/PRGV robot
+// records. Operation is the name of whatever MakeMKV is currently doing (from
+// the most recent PRGC), and Current/Total/Max are the matching PRGV triple:
+// Current is progress within Operation, Total is overall progress across the
+// whole Info/Rip call, both on a 0..Max scale.
+type Progress struct {
+	Operation           string
+	Current, Total, Max int
+}
+
 // Client runs makemkvcon.
 type Client struct {
 	// Runner executes makemkvcon. Zero value means ExecRunner.
 	Runner CommandRunner
 	// Binary is the executable to run. Zero value means DefaultBinary.
 	Binary string
-	// MinLengthSeconds is makemkv.min_track_duration: titles shorter than this
-	// are not enumerated or ripped. Zero means no minimum.
+	// MinLengthSeconds is makemkv.min_track_duration. Rip does not write
+	// titles shorter than this to disk; Info ignores it and always reports
+	// every title (see Info's doc comment for why). Zero means no minimum.
 	MinLengthSeconds int
+	// Log receives a warning for every error-dialog-flagged MSG record that
+	// arrives on an otherwise successful (exit 0) run — MakeMKV raises those
+	// for conditions it then recovers from (a retried SCSI read), and a
+	// clean exit is trusted over them. Nil means slog.Default().
+	Log *slog.Logger
+	// OnProgress, if set, is called for every PRGV record during Info or Rip.
+	// It must return quickly: MakeMKV blocks on its output pipe until
+	// something reads it, so a slow OnProgress stalls the rip.
+	OnProgress func(Progress)
 }
 
 // NewClient returns a Client that shells out to the real makemkvcon.
@@ -146,21 +206,33 @@ func NewClient(minLengthSeconds int) *Client {
 	}
 }
 
-// Info enumerates the titles on source without ripping. source is a makemkvcon
-// source specifier such as "disc:0" or "dev:/dev/sr0".
+// Info enumerates every title on source without ripping, regardless of
+// MinLengthSeconds. source is a makemkvcon source specifier such as "disc:0"
+// or "dev:/dev/sr0".
 //
-// A disc with no titles long enough to keep is not an error: the result is an
-// empty slice and the caller decides what that means.
+// min_track_duration is deliberately not passed here: internal/bluray/titles.go
+// classifies tracks by duration and, per docs/CLAUDE.md's rule order, a
+// commentary-flagged title shorter than the floor is still a "commentary" —
+// not a "skip" — which Classify can only decide if the title reaches it in
+// the first place. Filtering at enumeration time would make that rule
+// unreachable and silently drop the title instead. Classify owns the floor;
+// this call reports everything and lets it decide.
 func (c *Client) Info(ctx context.Context, source string) ([]Track, error) {
-	tracks, _, err := c.run(ctx, append(c.commonArgs(), "info", source)...)
+	tracks, _, err := c.run(ctx, "-r", "--cache=1024", "info", source)
 	return tracks, err
 }
 
 // Rip writes every title of source into outputDir as MKV and returns the
 // tracks with OutputPath set. Streams are copied as-is; no transcoding flag is
-// ever passed.
+// ever passed. Unlike Info, this does apply MinLengthSeconds: ripping a title
+// only for Classify to mark it skip wastes disk I/O Info's enumeration does
+// not cost.
 func (c *Client) Rip(ctx context.Context, source, outputDir string) ([]Track, error) {
-	tracks, messages, err := c.run(ctx, append(c.commonArgs(), "mkv", source, "all", outputDir)...)
+	args := []string{"-r", "--cache=1024"}
+	if c.MinLengthSeconds >= 0 {
+		args = append(args, "--minlength="+strconv.Itoa(c.MinLengthSeconds))
+	}
+	tracks, messages, err := c.run(ctx, append(args, "mkv", source, "all", outputDir)...)
 	if err != nil {
 		return nil, err
 	}
@@ -193,16 +265,6 @@ func (c *Client) Rip(ctx context.Context, source, outputDir string) ([]Track, er
 	return tracks, nil
 }
 
-// commonArgs are the options shared by every invocation: robot mode, MakeMKV's
-// own read cache (in megabytes), and the minimum title length.
-func (c *Client) commonArgs() []string {
-	args := []string{"-r", "--cache=1024"}
-	if c.MinLengthSeconds >= 0 {
-		args = append(args, "--minlength="+strconv.Itoa(c.MinLengthSeconds))
-	}
-	return args
-}
-
 func (c *Client) run(ctx context.Context, args ...string) ([]Track, []message, error) {
 	runner := c.Runner
 	if runner == nil {
@@ -213,29 +275,48 @@ func (c *Client) run(ctx context.Context, args ...string) ([]Track, []message, e
 		binary = DefaultBinary
 	}
 
-	stdout, runErr := runner.Run(ctx, binary, args...)
-	tracks, messages, parseErr := parseRobotOutput(stdout)
+	parser := &robotParser{titles: map[int]*title{}, onProgress: c.OnProgress}
+	runErr := runner.Run(ctx, binary, parser.processLine, args...)
 
 	if runErr != nil {
+		var perr *parseError
+		if errors.As(runErr, &perr) {
+			// The process itself exited cleanly (a parseError only reaches
+			// here when lineWriter's write-side check let it through, i.e.
+			// cmd.Run succeeded), so there is nothing more MakeMKV can add.
+			return nil, nil, fmt.Errorf("makemkvcon: parsing output: %w", perr.err)
+		}
 		if errors.Is(runErr, exec.ErrNotFound) {
 			return nil, nil, fmt.Errorf("%w: %v", ErrNotInstalled, runErr)
 		}
 		// Output is expected to be partial after a failure, so prefer
-		// MakeMKV's own diagnosis over a parse complaint. parseRobotOutput
-		// returns whatever messages it accumulated before a parse error too,
-		// so this still finds MakeMKV's diagnosis on truncated output.
-		if msg, ok := firstErrorMessage(messages); ok {
+		// MakeMKV's own diagnosis over a bare exit error. parser.messages
+		// holds whatever accumulated before the process gave up, so this
+		// still finds MakeMKV's diagnosis on truncated output.
+		if msg, ok := firstErrorMessage(parser.messages); ok {
 			return nil, nil, fmt.Errorf("makemkvcon: %s: %w", msg, runErr)
 		}
 		return nil, nil, fmt.Errorf("makemkvcon: %w", runErr)
 	}
-	if parseErr != nil {
-		return nil, nil, fmt.Errorf("makemkvcon: parsing output: %w", parseErr)
+
+	// Exit 0: trust it. MakeMKV raises an error-dialog-flagged MSG both for
+	// genuinely fatal conditions and for ones it then recovers from mid-run
+	// (a retried SCSI read that still finishes the title) — failing here
+	// regardless would throw away a completed multi-hour rip over a message
+	// that turned out not to matter. Surface each as a warning instead.
+	for _, m := range parser.messages {
+		if m.isError() {
+			c.logger().Warn("makemkvcon: recoverable condition", "code", m.code, "message", m.text)
+		}
 	}
-	if msg, ok := firstErrorMessage(messages); ok {
-		return nil, nil, fmt.Errorf("makemkvcon: %s", msg)
+	return collectTracks(parser.titles), parser.messages, nil
+}
+
+func (c *Client) logger() *slog.Logger {
+	if c.Log != nil {
+		return c.Log
 	}
-	return tracks, messages, nil
+	return slog.Default()
 }
 
 // Attribute ids from AP_ItemAttributeId in apdefs.h.
@@ -332,61 +413,98 @@ type title struct {
 	streams map[int]*stream
 }
 
-// parseRobotOutput parses makemkvcon -r output into titles and messages.
-// Unrecognized record types are ignored; a malformed record of a type we do
-// parse is an error. On error the messages accumulated up to that point are
-// still returned, since truncated output (the common case for a failure) is
-// exactly when the caller most needs MakeMKV's own diagnosis.
-func parseRobotOutput(data []byte) ([]Track, []message, error) {
-	titles := map[int]*title{}
-	var messages []message
+// parseError wraps a malformed-record error from robotParser.processLine, so
+// Client.run can tell a bad record apart from the process itself failing —
+// the two need different error messages and different treatment of whatever
+// messages were accumulated first.
+type parseError struct{ err error }
 
-	for n, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			continue
-		}
-		colon := strings.IndexByte(line, ':')
-		if colon < 0 {
-			continue
-		}
-		kind, rest := line[:colon], line[colon+1:]
-		switch kind {
-		case "MSG", "TCOUNT", "TINFO", "SINFO":
-		default:
-			continue
-		}
+func (e *parseError) Error() string { return e.err.Error() }
+func (e *parseError) Unwrap() error { return e.err }
 
-		fields, err := splitRobotFields(rest)
+// robotParser accumulates makemkvcon -r output one line at a time, so a
+// long-running rip can surface PRGV progress before it exits rather than only
+// after the whole process finishes. Unrecognized record types are ignored; a
+// malformed record of a type it does parse stops processing with a
+// *parseError. See parseMessage, applyTitleInfo, applyStreamInfo and the PRGC
+// /PRGV cases below for the record layouts, from
+// https://www.makemkv.com/developers/usage.txt and apdefs.h.
+type robotParser struct {
+	titles     map[int]*title
+	messages   []message
+	onProgress func(Progress)
+
+	// progressOp is the operation name from the most recent PRGC record,
+	// carried forward onto every PRGV until the next PRGC.
+	progressOp string
+	lineNum    int
+}
+
+// processLine is a CommandRunner onLine callback.
+func (p *robotParser) processLine(line []byte) error {
+	p.lineNum++
+	s := strings.TrimRight(string(line), "\r")
+	if s == "" {
+		return nil
+	}
+	colon := strings.IndexByte(s, ':')
+	if colon < 0 {
+		return nil
+	}
+	kind, rest := s[:colon], s[colon+1:]
+	switch kind {
+	case "MSG", "TCOUNT", "TINFO", "SINFO", "PRGC", "PRGV":
+	default:
+		return nil
+	}
+
+	fields, err := splitRobotFields(rest)
+	if err != nil {
+		return &parseError{fmt.Errorf("line %d: %s: %w", p.lineNum, kind, err)}
+	}
+	switch kind {
+	case "MSG":
+		msg, err := parseMessage(fields)
 		if err != nil {
-			return nil, messages, fmt.Errorf("line %d: %s: %w", n+1, kind, err)
+			return &parseError{fmt.Errorf("line %d: MSG: %w", p.lineNum, err)}
 		}
-		switch kind {
-		case "MSG":
-			msg, err := parseMessage(fields)
-			if err != nil {
-				return nil, messages, fmt.Errorf("line %d: MSG: %w", n+1, err)
-			}
-			messages = append(messages, msg)
-		case "TCOUNT":
-			if len(fields) != 1 {
-				return nil, messages, fmt.Errorf("line %d: TCOUNT: want 1 field, got %d", n+1, len(fields))
-			}
-			if _, err := strconv.Atoi(fields[0]); err != nil {
-				return nil, messages, fmt.Errorf("line %d: TCOUNT: %w", n+1, err)
-			}
-		case "TINFO":
-			if err := applyTitleInfo(titles, fields); err != nil {
-				return nil, messages, fmt.Errorf("line %d: TINFO: %w", n+1, err)
-			}
-		case "SINFO":
-			if err := applyStreamInfo(titles, fields); err != nil {
-				return nil, messages, fmt.Errorf("line %d: SINFO: %w", n+1, err)
+		p.messages = append(p.messages, msg)
+	case "TCOUNT":
+		if len(fields) != 1 {
+			return &parseError{fmt.Errorf("line %d: TCOUNT: want 1 field, got %d", p.lineNum, len(fields))}
+		}
+		if _, err := strconv.Atoi(fields[0]); err != nil {
+			return &parseError{fmt.Errorf("line %d: TCOUNT: %w", p.lineNum, err)}
+		}
+	case "TINFO":
+		if err := applyTitleInfo(p.titles, fields); err != nil {
+			return &parseError{fmt.Errorf("line %d: TINFO: %w", p.lineNum, err)}
+		}
+	case "SINFO":
+		if err := applyStreamInfo(p.titles, fields); err != nil {
+			return &parseError{fmt.Errorf("line %d: SINFO: %w", p.lineNum, err)}
+		}
+	case "PRGC":
+		// PRGC:code,id,name — the current operation's name. A malformed PRGC
+		// is not fatal: progress is advisory, and there will be another one
+		// along shortly.
+		if len(fields) == 3 {
+			p.progressOp = fields[2]
+		}
+	case "PRGV":
+		// PRGV:current,total,max — current operation / overall progress on a
+		// shared 0..max scale. Same leniency as PRGC: skip rather than abort
+		// a rip over one bad progress tick.
+		if len(fields) == 3 && p.onProgress != nil {
+			cur, err1 := strconv.Atoi(fields[0])
+			tot, err2 := strconv.Atoi(fields[1])
+			max, err3 := strconv.Atoi(fields[2])
+			if err1 == nil && err2 == nil && err3 == nil {
+				p.onProgress(Progress{Operation: p.progressOp, Current: cur, Total: tot, Max: max})
 			}
 		}
 	}
-
-	return collectTracks(titles), messages, nil
+	return nil
 }
 
 // parseMessage reads MSG:code,flags,count,message,format,param...
