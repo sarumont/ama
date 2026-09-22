@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<disclib xmlns="urn:BDA:bdmv;disclib" xmlns:di="urn:BDA:bdmv;discinfo">
+    <di:discinfo>
+        <di:title>
+            <di:name>Iron Man 3</di:name>
+            <di:numSets>1</di:numSets>
+            <di:setNumber>1</di:setNumber>
+            <di:alternative>MARVELS_IRON_MAN_3_BLU_RAY</di:alternative>
+        </di:title>
+        <di:description>
+            <di:tableOfContents>
+                <di:titleName titleNumber="1">Iron Man 3</di:titleName>
+                <di:titleName titleNumber="2">Deleted Scenes</di:titleName>
+            </di:tableOfContents>
+            <di:thumbnail href="ironman3.jpg" size="416x240"/>
+        </di:description>
+        <di:language>eng</di:language>
+    </di:discinfo>
+</disclib>
