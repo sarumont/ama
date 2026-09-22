@@ -134,7 +134,7 @@ func (IoctlChecker) Status(device string) (DriveStatus, error) {
 	if err != nil {
 		return StatusNoInfo, fmt.Errorf("open %s: %w", device, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	status, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), cdromDriveStatus, cdslCurrent)
 	if errno != 0 {
@@ -149,7 +149,7 @@ func ejectDevice(device string) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", device, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), cdromEject, 0); errno != 0 {
 		return fmt.Errorf("CDROMEJECT %s: %w", device, errno)
