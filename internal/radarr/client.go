@@ -377,7 +377,7 @@ func (a arr) do(ctx context.Context, op, method, path string, query url.Values, 
 	if err != nil {
 		return 0, nil, fmt.Errorf("%s: %s: %s unreachable at %s: %w", a.app, op, a.app, a.baseURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
