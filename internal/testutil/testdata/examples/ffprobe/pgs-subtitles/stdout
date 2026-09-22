@@ -1,0 +1,83 @@
+{
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "h264",
+            "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+            "codec_type": "video",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "24000/1001",
+            "disposition": {
+                "default": 1,
+                "forced": 0
+            },
+            "tags": {
+                "language": "eng",
+                "BPS": "24851234",
+                "NUMBER_OF_BYTES": "20981124096"
+            }
+        },
+        {
+            "index": 1,
+            "codec_name": "dts",
+            "codec_long_name": "DCA (DTS Coherent Acoustics)",
+            "profile": "DTS-HD MA",
+            "codec_type": "audio",
+            "channels": 6,
+            "channel_layout": "5.1(side)",
+            "sample_rate": "48000",
+            "disposition": {
+                "default": 1,
+                "forced": 0
+            },
+            "tags": {
+                "language": "eng",
+                "title": "DTS-HD Master Audio 5.1",
+                "NUMBER_OF_BYTES": "4831838208"
+            }
+        },
+        {
+            "index": 2,
+            "codec_name": "hdmv_pgs_subtitle",
+            "codec_long_name": "HDMV Presentation Graphic Stream subtitles",
+            "codec_type": "subtitle",
+            "disposition": {
+                "default": 0,
+                "forced": 0
+            },
+            "tags": {
+                "language": "eng",
+                "NUMBER_OF_BYTES": "10485760"
+            }
+        },
+        {
+            "index": 3,
+            "codec_name": "hdmv_pgs_subtitle",
+            "codec_long_name": "HDMV Presentation Graphic Stream subtitles",
+            "codec_type": "subtitle",
+            "disposition": {
+                "default": 0,
+                "forced": 0
+            },
+            "tags": {
+                "language": "eng",
+                "NUMBER_OF_BYTES": "629145"
+            }
+        },
+        {
+            "index": 4,
+            "codec_name": "hdmv_pgs_subtitle",
+            "codec_long_name": "HDMV Presentation Graphic Stream subtitles",
+            "codec_type": "subtitle",
+            "disposition": {
+                "default": 0,
+                "forced": 0
+            },
+            "tags": {
+                "language": "fra",
+                "NUMBER_OF_BYTES": "9961472"
+            }
+        }
+    ]
+}
