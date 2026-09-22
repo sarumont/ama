@@ -15,7 +15,7 @@ makemkv:
 tmdb:
   api_key: ""                      # TMDB API read access token, sent as a
                                     # bearer token (required)
-  auto_confirm_threshold: null     # fuzzy-match confidence (0-1) at or above
+  auto_confirm_threshold: null     # fuzzy-match confidence (0,1] at or above
                                     # which a candidate is auto-confirmed
                                     # without a manual step; unset or below
                                     # this floor always requires manual

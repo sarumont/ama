@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<disclib xmlns="urn:BDA:bdmv;disclib" xmlns:di="urn:BDA:bdmv;discinfo">
+    <di:discinfo>
+        <di:title>
+            <di:name>  Blade Runner (1982)
+            </di:name>
+            <di:numSets>1</di:numSets>
+            <di:setNumber>1</di:setNumber>
+        </di:title>
+        <di:description>
+            <di:thumbnail href="bladerunner.jpg" size="416x240"/>
+        </di:description>
+        <di:language>eng</di:language>
+    </di:discinfo>
+</disclib>
