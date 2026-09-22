@@ -1,0 +1,10 @@
+# Hand-constructed sample, not captured from a real rip. Shaped after
+# ffprobe 6.1 JSON output for an MKV with two English PGS tracks, the smaller
+# of which is a forced-subtitle candidate (ratio 0.06 of the larger).
+ffprobe
+-v
+quiet
+-print_format
+json
+-show_streams
+/media/temp/EXAMPLE_FEATURE_t00.mkv
