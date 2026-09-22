@@ -501,7 +501,7 @@ func TestLockForCanonicalizesPath(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(wd)
+	defer func() { _ = os.Chdir(wd) }()
 
 	if lockFor(abs) != lockFor("rip.manifest.json") {
 		t.Error("lockFor returned different mutexes for an absolute and a relative spelling of the same file")

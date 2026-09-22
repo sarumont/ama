@@ -121,16 +121,16 @@ func write(path string, m *Manifest) error {
 	}
 	// After a successful rename this name is gone and Remove is a no-op; on
 	// every failure path it is what keeps temp files from accumulating.
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("writing temp manifest %s: %w", tmp.Name(), err)
 	}
 	// Sync before the rename so the rename cannot expose a file whose contents
 	// have not reached the disk yet.
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("syncing temp manifest %s: %w", tmp.Name(), err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -154,7 +154,7 @@ func write(path string, m *Manifest) error {
 	// to do here anyway.
 	if d, err := os.Open(dir); err == nil {
 		_ = d.Sync()
-		d.Close()
+		_ = d.Close()
 	}
 	return nil
 }
