@@ -140,7 +140,18 @@ func TestDetectorEvents(t *testing.T) {
 				{err: errDevice},
 				{status: StatusDiscOK},
 			},
-			want: []EventType{DiscInserted, DriveError, DriveError, DriveError, DiscInserted},
+			// DriveError is emitted once on the transition into failing, not
+			// on every one of the three consecutive failed polls.
+			want: []EventType{DiscInserted, DriveError, DiscInserted},
+		},
+		{
+			name: "a recovered error can emit DriveError again on a later failure",
+			steps: []step{
+				{err: errDevice},
+				{status: StatusNoDisc},
+				{err: errDevice},
+			},
+			want: []EventType{DriveError, DriveError},
 		},
 		{
 			name:  "drive never answers at all",
@@ -156,7 +167,12 @@ func TestDetectorEvents(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			d := New(testDevice, testInterval, &fakeChecker{steps: tt.steps})
+			// A large staleAfterNotReady keeps DriveStalled out of these
+			// cases' scope: fakeChecker replays its last step forever once a
+			// script runs out, which would otherwise cross the threshold
+			// during the settle wait below for any case ending in
+			// StatusNotReady. DriveStalled has its own dedicated test.
+			d := New(testDevice, testInterval, &fakeChecker{steps: tt.steps}, 1000)
 			go d.Run(ctx)
 
 			var got []EventType
@@ -200,11 +216,10 @@ func TestDetectorEvents(t *testing.T) {
 func TestDetectorRunStopsOnCancel(t *testing.T) {
 	t.Parallel()
 
-	// A drive that is always loaded means Run is blocked trying to deliver
-	// DiscInserted to a consumer that never reads, which is the case where
-	// cancellation is easiest to get wrong.
+	// Cancellation must work whether or not a consumer is draining Events(),
+	// including the moment right after the one DiscInserted this scripts.
 	checker := &fakeChecker{steps: []step{{status: StatusDiscOK}}}
-	d := New(testDevice, testInterval, checker)
+	d := New(testDevice, testInterval, checker, 0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -220,8 +235,60 @@ func TestDetectorRunStopsOnCancel(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancellation")
 	}
-	if _, ok := <-d.Events(); ok {
-		t.Error("events channel still open after Run returned")
+	for {
+		e, ok := <-d.Events()
+		if !ok {
+			return
+		}
+		if e.Type != DiscInserted {
+			t.Errorf("drained event %v, want only DiscInserted before close", e.Type)
+		}
+	}
+}
+
+func TestDetectorDriveStalled(t *testing.T) {
+	t.Parallel()
+
+	steps := make([]step, 5)
+	for i := range steps {
+		steps[i] = step{status: StatusNotReady}
+	}
+	steps = append(steps, step{status: StatusDiscOK})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	d := New(testDevice, testInterval, &fakeChecker{steps: steps}, 3)
+	go d.Run(ctx)
+
+	want := []EventType{DriveStalled, DiscInserted}
+	var got []EventType
+	timeout := time.After(5 * time.Second)
+	for len(got) < len(want) {
+		select {
+		case e, ok := <-d.Events():
+			if !ok {
+				t.Fatalf("events channel closed after %v, want %v", got, want)
+			}
+			got = append(got, e.Type)
+		case <-timeout:
+			t.Fatalf("timed out with %v, want %v", got, want)
+		}
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestNewClampsNonPositiveStaleAfterNotReady(t *testing.T) {
+	t.Parallel()
+
+	for _, n := range []int{0, -1} {
+		if got := New(testDevice, testInterval, &fakeChecker{}, n).staleAfterNotReady; got != defaultStaleAfterNotReady {
+			t.Errorf("New(_, _, _, %d).staleAfterNotReady = %v, want %v", n, got, defaultStaleAfterNotReady)
+		}
 	}
 }
 
@@ -229,7 +296,7 @@ func TestNewClampsNonPositiveInterval(t *testing.T) {
 	t.Parallel()
 
 	for _, interval := range []time.Duration{0, -time.Second} {
-		if got := New(testDevice, interval, &fakeChecker{}).interval; got != minInterval {
+		if got := New(testDevice, interval, &fakeChecker{}, 0).interval; got != minInterval {
 			t.Errorf("New(_, %v, _).interval = %v, want %v", interval, got, minInterval)
 		}
 	}
@@ -238,7 +305,7 @@ func TestNewClampsNonPositiveInterval(t *testing.T) {
 func TestNewDefaultsToIoctlChecker(t *testing.T) {
 	t.Parallel()
 
-	if _, ok := New(testDevice, testInterval, nil).checker.(IoctlChecker); !ok {
+	if _, ok := New(testDevice, testInterval, nil, 0).checker.(IoctlChecker); !ok {
 		t.Error("New with a nil checker did not default to IoctlChecker")
 	}
 }
@@ -251,11 +318,47 @@ func TestIoctlCheckerMissingDevice(t *testing.T) {
 	}
 }
 
-func TestEjectMissingDevice(t *testing.T) {
+func TestEjectDeviceMissingDevice(t *testing.T) {
 	t.Parallel()
 
-	if err := Eject(testDevice); err == nil {
+	if err := ejectDevice(testDevice); err == nil {
+		t.Error("ejectDevice on a missing device returned no error")
+	}
+}
+
+func TestDetectorEjectRoutesThroughRun(t *testing.T) {
+	t.Parallel()
+
+	checker := &fakeChecker{steps: []step{{status: StatusNoDisc}}}
+	d := New(testDevice, testInterval, checker, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+	go func() {
+		for range d.Events() {
+		}
+	}()
+
+	// testDevice does not exist, so this exercises the same failure ejectDevice
+	// does directly; the point here is that it comes back through Run at all.
+	if err := d.Eject(ctx); err == nil {
 		t.Error("Eject on a missing device returned no error")
+	}
+}
+
+func TestDetectorEjectContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	// No Run goroutine is started, so nothing will ever service the request;
+	// Eject must return once ctx is cancelled rather than block forever.
+	d := New(testDevice, testInterval, &fakeChecker{}, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := d.Eject(ctx); err != context.Canceled {
+		t.Errorf("Eject with a cancelled context = %v, want %v", err, context.Canceled)
 	}
 }
 
