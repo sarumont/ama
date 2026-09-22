@@ -63,18 +63,22 @@ This is the most failure-prone component. Implement carefully:
 
 ```
 given all tracks from makemkvcon:
-  sort by duration descending
-  main_feature = tracks[0]
+  main_feature = longest track with no audio track flagged commentary
   for each remaining track:
-    if duration >= main_feature.duration * 0.90:
+    if any_audio_track.has_commentary_flag:
+      role = "commentary"      // authoritative: checked before duration
+    else if duration >= main_feature.duration * 0.90:
       role = "alternate_cut"   // flag for user review
-    else if any_audio_track.has_commentary_flag:
-      role = "commentary"
     else if duration < config.min_track_duration:
       role = "skip"
     else:
       role = "extra"
 ```
+
+A commentary-flagged track is never the main feature and is always
+`"commentary"`, regardless of how close its duration is to the feature's or
+how short it is. If every track is commentary-flagged, the longest one is
+still the feature.
 
 ## Subtitle Forced Detection
 
