@@ -121,13 +121,19 @@ ama/
 Title selection is the most failure-prone part of any automated ripping
 pipeline. AMA applies the following rules in order:
 
-1. **Longest track** → main feature
-2. **Tracks within 10% of main feature duration** → flagged as alternate cuts,
+1. **Tracks with a secondary audio track flagged as commentary** → excluded
+   from main feature candidacy entirely, placed in `extras/`. This check is
+   authoritative and runs first: a commentary-flagged track is a commentary
+   regardless of its duration, even one within 10% of the feature or below
+   the minimum duration below.
+2. **Longest remaining track** → main feature
+3. **Tracks within 10% of main feature duration** → flagged as alternate cuts,
    moved to `{edition-...}` naming, require manual confirmation in web UI
-3. **Tracks with a secondary audio track flagged as commentary** → excluded
-   from main feature candidates, placed in extras
 4. **Remaining tracks above minimum duration** (configurable, default 60s) →
    extras candidates, placed in `extras/` subfolder for manual classification
+
+If every track on the disc is commentary-flagged, there is no clean track to
+prefer, so the longest track is still the feature.
 
 The web UI surfaces any ambiguous classification decisions before the rip is
 considered complete.

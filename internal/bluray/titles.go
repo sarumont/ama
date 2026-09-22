@@ -84,28 +84,36 @@ const (
 )
 
 // Classify assigns a Role to every title, applying the rules from
-// docs/CLAUDE.md in this exact order. The order is normative:
+// docs/ARCHITECTURE.md in this exact order. The order is normative:
 //
-//	sort by duration descending
-//	feature = tracks[0]
+//	feature = longest track with no audio track flagged as commentary
 //	for each remaining track:
-//	  if duration >= feature.duration * 0.90 -> alternate_cut
-//	  else if any audio track has the commentary flag -> commentary
+//	  if any audio track has the commentary flag -> commentary
+//	  else if duration >= feature.duration * 0.90 -> alternate_cut
 //	  else if duration < minTrackDuration -> skip
 //	  else -> extra
 //
-// Because the alternate cut check comes first, a commentary-flagged title
-// within 10% of the feature is an alternate_cut, not a commentary. Because the
-// commentary check comes before the minimum duration check, a
-// commentary-flagged title shorter than minTrackDuration is a commentary, not
-// a skip.
+// A commentary-flagged title is never the feature: discs routinely expose
+// the commentary as a separate full-length playlist with the same duration
+// as the clean feature, and HasCommentaryAudio is the authoritative signal
+// for keeping it out of feature contention regardless of duration or the
+// index tiebreak below. Because the commentary check runs first for every
+// remaining track too, a commentary-flagged title within 10% of the
+// feature's duration is a commentary, not an alternate_cut, and one shorter
+// than minTrackDuration is a commentary, not a skip.
+//
+// If every title on the disc is commentary-flagged, there is no clean track
+// to prefer, so the longest track is still the feature and every other
+// title is classified commentary as usual.
 //
 // minTrackDuration is makemkv.min_track_duration in seconds. Zero or negative
 // means no minimum, so nothing is skipped for being short.
 //
-// The result is ordered by descending duration, i.e. the feature is always
-// first. tracks is not modified. An empty (or nil) input yields an empty
-// result and no feature is invented.
+// The result begins with the feature; the remaining tracks follow in the
+// same descending-duration order they were sorted in, with the feature's
+// entry removed (which need not be the disc's longest track overall, since a
+// longer commentary-flagged track can precede it). tracks is not modified.
+// An empty (or nil) input yields an empty result and no feature is invented.
 //
 // The returned Tracks share their AudioTracks backing storage with tracks:
 // Classify copies the Track structs but not the audio-stream slices, so a
@@ -132,7 +140,14 @@ func Classify(tracks []Track, minTrackDuration int) []Classification {
 		return sorted[i].Index < sorted[j].Index
 	})
 
-	feature := sorted[0]
+	featureIdx := 0
+	for i, t := range sorted {
+		if !hasCommentaryAudio(t) {
+			featureIdx = i
+			break
+		}
+	}
+	feature := sorted[featureIdx]
 	out = append(out, Classification{
 		Track:  feature,
 		Role:   RoleFeature,
@@ -140,18 +155,21 @@ func Classify(tracks []Track, minTrackDuration int) []Classification {
 	})
 
 	alternateCuts := 0
-	for _, track := range sorted[1:] {
+	for i, track := range sorted {
+		if i == featureIdx {
+			continue
+		}
 		c := Classification{Track: track}
 		switch {
+		case hasCommentaryAudio(track):
+			c.Role = RoleCommentary
+			c.Reason = "audio track flagged as commentary"
 		case isAlternateCut(track.DurationSeconds, feature.DurationSeconds):
 			alternateCuts++
 			c.Role = RoleAlternateCut
 			c.Reason = "duration within 10% of feature"
 			c.Edition = editionName(alternateCuts)
 			c.NeedsReview = true
-		case hasCommentaryAudio(track):
-			c.Role = RoleCommentary
-			c.Reason = "audio track flagged as commentary"
 		case track.DurationSeconds < minTrackDuration:
 			c.Role = RoleSkip
 			c.Reason = "duration below minimum track duration"

@@ -156,14 +156,14 @@ func TestClassify(t *testing.T) {
 			},
 		},
 
-		// The two cases that prove the rule ORDER from docs/CLAUDE.md.
+		// The two cases that prove the rule ORDER from docs/ARCHITECTURE.md.
 		{
-			name:             "rule order: commentary within 10% of the feature is an alternate cut",
+			name:             "rule order: commentary within 10% of the feature is a commentary, not an alternate cut",
 			tracks:           []Track{track(0, 1000), commentaryTrack(1, 950)},
 			minTrackDuration: 60,
 			want: []want{
 				{index: 0, role: RoleFeature},
-				{index: 1, role: RoleAlternateCut, edition: "Alternate Cut 1", needsReview: true},
+				{index: 1, role: RoleCommentary},
 			},
 		},
 		{
@@ -289,11 +289,32 @@ func TestClassify(t *testing.T) {
 			minTrackDuration: 60,
 			want: []want{
 				{index: 0, role: RoleFeature},
-				{index: 1, role: RoleAlternateCut, edition: "Alternate Cut 1", needsReview: true},
-				{index: 5, role: RoleAlternateCut, edition: "Alternate Cut 2", needsReview: true},
+				{index: 1, role: RoleCommentary},
+				{index: 5, role: RoleAlternateCut, edition: "Alternate Cut 1", needsReview: true},
 				{index: 2, role: RoleCommentary},
 				{index: 3, role: RoleExtra},
 				{index: 4, role: RoleSkip},
+			},
+		},
+		{
+			name: "commentary-flagged track with the feature's own duration is never the feature",
+			tracks: []Track{
+				commentaryTrack(0, 7647),
+				track(1, 7647),
+			},
+			minTrackDuration: 60,
+			want: []want{
+				{index: 1, role: RoleFeature},
+				{index: 0, role: RoleCommentary},
+			},
+		},
+		{
+			name:             "every title commentary-flagged: longest is still the feature",
+			tracks:           []Track{commentaryTrack(0, 1000), commentaryTrack(1, 900)},
+			minTrackDuration: 60,
+			want: []want{
+				{index: 0, role: RoleFeature},
+				{index: 1, role: RoleCommentary},
 			},
 		},
 	}
