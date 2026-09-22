@@ -693,18 +693,18 @@ func writeLicenseKeyTo(path, key string) error {
 	if err != nil {
 		return fmt.Errorf("makemkv: creating temp file in %s: %w", dir, err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("makemkv: securing temp file: %w", err)
 	}
 	if _, err := tmp.WriteString(contents); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("makemkv: writing temp file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("makemkv: syncing temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -718,7 +718,7 @@ func writeLicenseKeyTo(path, key string) error {
 	if err != nil {
 		return fmt.Errorf("makemkv: opening %s: %w", dir, err)
 	}
-	defer dirFile.Close()
+	defer func() { _ = dirFile.Close() }()
 	if err := dirFile.Sync(); err != nil {
 		return fmt.Errorf("makemkv: syncing %s: %w", dir, err)
 	}
