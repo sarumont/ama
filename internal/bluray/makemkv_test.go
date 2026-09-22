@@ -1,8 +1,10 @@
 package bluray
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +13,8 @@ import (
 	"testing"
 )
 
-// fakeRunner replays recorded makemkvcon output instead of shelling out, and
+// fakeRunner replays recorded makemkvcon output instead of shelling out,
+// feeding it to onLine one line at a time the way ExecRunner does, and
 // records how it was called.
 type fakeRunner struct {
 	stdout []byte
@@ -21,10 +24,23 @@ type fakeRunner struct {
 	args []string
 }
 
-func (f *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+func (f *fakeRunner) Run(_ context.Context, name string, onLine func([]byte) error, args ...string) error {
 	f.name = name
 	f.args = args
-	return f.stdout, f.err
+	// Mirrors ExecRunner's priority: a process failure (f.err) is checked
+	// after feeding every line, but wins over a parse error from onLine if
+	// both occur, the same way cmd.Run's error is checked before lw.err.
+	var lineErr error
+	for _, line := range bytes.Split(f.stdout, []byte("\n")) {
+		if lineErr != nil {
+			break
+		}
+		lineErr = onLine(line)
+	}
+	if f.err != nil {
+		return f.err
+	}
+	return lineErr
 }
 
 func fixture(t *testing.T, name string) []byte {
@@ -120,23 +136,19 @@ func TestClientInfo(t *testing.T) {
 	}
 }
 
+// TestClientInfoArgs guards the "Info always reports every title" rule: it
+// must never pass --minlength, regardless of MinLengthSeconds, so Classify
+// (internal/bluray/titles.go) sees titles the floor would otherwise filter
+// out before it can apply the commentary-below-minimum precedence rule.
 func TestClientInfoArgs(t *testing.T) {
 	tests := []struct {
 		name      string
 		minLength int
-		want      []string
 	}{
-		{
-			name:      "minimum title length applied",
-			minLength: 60,
-			want:      []string{"-r", "--cache=1024", "--minlength=60", "info", "disc:0"},
-		},
-		{
-			name:      "zero means no minimum, passed explicitly",
-			minLength: 0,
-			want:      []string{"-r", "--cache=1024", "--minlength=0", "info", "disc:0"},
-		},
+		{name: "nonzero minimum not passed", minLength: 60},
+		{name: "zero minimum not passed", minLength: 0},
 	}
+	want := []string{"-r", "--cache=1024", "info", "disc:0"}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -149,10 +161,33 @@ func TestClientInfoArgs(t *testing.T) {
 			if runner.name != DefaultBinary {
 				t.Errorf("binary = %q, want %q", runner.name, DefaultBinary)
 			}
-			if !reflect.DeepEqual(runner.args, tt.want) {
-				t.Errorf("args = %v, want %v", runner.args, tt.want)
+			if !reflect.DeepEqual(runner.args, want) {
+				t.Errorf("args = %v, want %v", runner.args, want)
 			}
 		})
+	}
+}
+
+// TestClientRipArgs guards the flip side of TestClientInfoArgs: unlike Info,
+// Rip does apply MinLengthSeconds, so a title Classify would mark skip is
+// never ripped to disk in the first place.
+func TestClientRipArgs(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"IRON_MAN_3_t00.mkv", "IRON_MAN_3_t01.mkv"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("mkv"), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	runner := &fakeRunner{stdout: fixture(t, "mkv_success.txt")}
+	client := &Client{Runner: runner, MinLengthSeconds: 60}
+
+	if _, err := client.Rip(context.Background(), "disc:0", dir); err != nil {
+		t.Fatalf("Rip: %v", err)
+	}
+
+	want := []string{"-r", "--cache=1024", "--minlength=60", "mkv", "disc:0", "all", dir}
+	if !reflect.DeepEqual(runner.args, want) {
+		t.Errorf("args = %v, want %v", runner.args, want)
 	}
 }
 
@@ -165,11 +200,6 @@ func TestClientInfoErrors(t *testing.T) {
 		wantIs   error
 		contains []string
 	}{
-		{
-			name:     "error message record",
-			fixture:  "info_disc_error.txt",
-			contains: []string{"Scsi error", "UNRECOVERED READ ERROR"},
-		},
 		{
 			name:     "non-zero exit carries stderr",
 			fixture:  "info_no_titles.txt",
@@ -256,6 +286,36 @@ func TestClientInfoErrors(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestClientInfoTrustsExitCode guards the "trust the exit code, surface the
+// warning" rule: an error-dialog-flagged MSG on an otherwise successful
+// (exit 0) run must not fail the call, but must be logged.
+// testdata/info_disc_error.txt carries two such messages — a recoverable
+// retried-read (2003) and one MakeMKV itself labels fatal (5004,
+// "Failed to open disc") — deliberately together, since the whole point of
+// trusting the exit code is not having to tell those apart here.
+func TestClientInfoTrustsExitCode(t *testing.T) {
+	var logged bytes.Buffer
+	client := &Client{
+		Runner: &fakeRunner{stdout: fixture(t, "info_disc_error.txt")},
+		Log:    slog.New(slog.NewTextHandler(&logged, nil)),
+	}
+
+	tracks, err := client.Info(context.Background(), "disc:0")
+	if err != nil {
+		t.Fatalf("Info: %v, want success (exit 0 must be trusted)", err)
+	}
+	if len(tracks) != 0 {
+		t.Errorf("tracks = %+v, want none (fixture has no TINFO records)", tracks)
+	}
+
+	out := logged.String()
+	for _, want := range []string{"2003", "Scsi error", "5004", "Failed to open disc"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log output does not contain %q; got %s", want, out)
+		}
 	}
 }
 
