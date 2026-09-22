@@ -633,7 +633,7 @@ func clearAMAEnv(t *testing.T) {
 		key, _, _ := strings.Cut(kv, "=")
 		if strings.HasPrefix(key, "AMA_") {
 			t.Setenv(key, "")
-			os.Unsetenv(key)
+			_ = os.Unsetenv(key)
 		}
 	}
 }

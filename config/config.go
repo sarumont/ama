@@ -336,7 +336,7 @@ func applyEnv(cfg *Config) error {
 			// file value. tmdb.auto_confirm_threshold is the documented
 			// exception: empty is how an operator explicitly clears it back
 			// to "unset".
-			if value == "" && !(b.section == "TMDB" && b.field == "AUTO_CONFIRM_THRESHOLD") {
+			if value == "" && (b.section != "TMDB" || b.field != "AUTO_CONFIRM_THRESHOLD") {
 				continue
 			}
 			if err := b.apply(cfg, value); err != nil {
