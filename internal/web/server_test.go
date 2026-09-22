@@ -63,7 +63,7 @@ func TestRoutes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GET %s: %v", tt.path, err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			if resp.StatusCode != tt.wantStatus {
 				t.Errorf("GET %s: status = %d, want %d", tt.path, resp.StatusCode, tt.wantStatus)
@@ -116,7 +116,7 @@ func TestStartShutsDownOnContextCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /history: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	cancel()
 	select {
@@ -142,7 +142,7 @@ func TestStartFailsOnBadBind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	srv := newTestServer(t)
 	srv.cfg.Web.Host = "127.0.0.1"
