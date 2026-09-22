@@ -10,7 +10,7 @@ tooling (subtitle OCR processor, Radarr integration, extras sorting workflow).
 {output_path}/{Title} ({Year})/
   {Title} ({Year}).mkv              ← main feature
   {Title} ({Year}).subtitles.json   ← subtitle analysis
-  {Title} ({Year}).processed.mkv    ← post-OCR output (host-side)
+  {Title} ({Year}).processed.mkv    ← post-OCR output
   {Title} ({Year}).manifest.json    ← this file
   extras/
     ...
@@ -118,10 +118,20 @@ tooling (subtitle OCR processor, Radarr integration, extras sorting workflow).
     "import_triggered_at": "2026-08-19T14:31:05Z"
   },
 
+  "sonarr": {
+    "added": false,
+    "added_at": null,
+    "import_triggered": false,
+    "import_triggered_at": null
+  },
+
   "warnings": [],
   "errors": []
 }
 ```
+
+Blu-ray rips populate whichever of `radarr`/`sonarr` matches the content type;
+the other is left in its zero state. CD rips omit both blocks entirely.
 
 ## Status Values
 
@@ -130,7 +140,7 @@ tooling (subtitle OCR processor, Radarr integration, extras sorting workflow).
 | `pending_confirmation` | Waiting for user to confirm disc identification |
 | `ripping` | MakeMKV/whipper in progress |
 | `analyzing` | Subtitle analysis running |
-| `pending_ocr` | Waiting for host-side OCR processor |
+| `pending_ocr` | PGS → SRT OCR conversion in progress |
 | `complete` | All steps finished successfully |
 | `error` | One or more errors; see `errors` array |
 

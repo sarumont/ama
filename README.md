@@ -14,7 +14,7 @@ missing link between a physical disc and a well-organized Plex/Jellyfin library.
 - **Disc identification** — BDMV metadata + TMDB fuzzy matching with manual
   confirmation step
 - **Subtitle handling** — PGS track analysis, forced-track detection, and
-  PGS → SRT OCR conversion (host-side, tesseract-backed)
+  PGS → SRT OCR conversion (tesseract-backed)
 - **Radarr/Sonarr integration** — automatic add + import scan trigger
 - **JSON manifest** — every rip produces a structured manifest for audit,
   downstream tooling, and extras sorting workflows
@@ -24,7 +24,6 @@ missing link between a physical disc and a well-organized Plex/Jellyfin library.
 
 - Transcoding or re-encoding of any kind
 - DVD ripping (planned for v2)
-- TV series / Sonarr integration (planned for v2)
 - Automated extras classification (handled by separate workflow)
 
 ## Architecture
@@ -33,16 +32,16 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full design documentation.
 
 ## Requirements
 
-### Host
-
-- `tesseract-ocr` — PGS subtitle OCR
-- `mkvtoolnix` — mkvpropedit / mkvmerge for subtitle muxing
-
-### Container
+AMA runs as a single Docker container. The image bundles every external tool
+the pipeline needs:
 
 - MakeMKV (licensed)
 - whipper
 - ffmpeg / ffprobe
+- tesseract-ocr — PGS subtitle OCR
+- mkvtoolnix — mkvpropedit / mkvmerge for subtitle muxing
+
+Building this container image is itself a project deliverable.
 
 ## Configuration
 
