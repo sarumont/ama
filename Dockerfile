@@ -177,6 +177,7 @@ RUN set -eux; \
         curl \
         eject \
         ffmpeg \
+        gosu \
         mkvtoolnix \
         whipper \
         tesseract-ocr \
@@ -207,11 +208,20 @@ COPY --from=go-builder /out/ama /usr/local/bin/ama
 # in at build time can be relied on — pass it at container-run-time instead
 # via `group_add:` in compose (see docs/CONFIG.md):
 #   group_add: ["<gid from `stat -c %g /dev/sr0` on the host>"]
+#
+# uid/gid 1000 are only the default. The container starts as root and
+# docker-entrypoint.sh remaps `ama` to PUID/PGID (env, default 1000:1000)
+# before dropping privileges — no build-time uid/gid can match every host
+# (a root-owned NAS mount, a second local account, ...) any more than the
+# cdrom GID above can, so it is a run-time remap for the same reason.
 RUN set -eux; \
     groupadd -g 1000 ama; \
     useradd -u 1000 -g ama -G cdrom,video -m -d /home/ama -s /usr/sbin/nologin ama; \
     mkdir -p /config /media/library /tmp/ama; \
     chown -R ama:ama /config /media/library /tmp/ama
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENV AMA_CONFIG=/config/ama.yaml \
     HOME=/home/ama \
@@ -221,12 +231,15 @@ ENV AMA_CONFIG=/config/ama.yaml \
 # /config      — ama.yaml (bind mount)
 # /media/library — movie + music output roots (bind mount)
 WORKDIR /home/ama
-USER ama
 
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${AMA_WEB_PORT:-8080}/" >/dev/null || exit 1
 
-# Exec form, no shell wrapper, so SIGTERM reaches the daemon directly.
-ENTRYPOINT ["/usr/local/bin/ama"]
+# Root at start (see docker-entrypoint.sh); it drops to ama:ama via gosu
+# before exec'ing the daemon, so SIGTERM still reaches ama directly — gosu
+# and the entrypoint script's own `exec` each replace the process image
+# rather than forking, so ama ends up running as PID 1 in practice.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/usr/local/bin/ama"]

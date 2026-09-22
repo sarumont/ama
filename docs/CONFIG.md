@@ -103,6 +103,8 @@ services:
       AMA_CONFIG: /config/ama.yaml
       AMA_MAKEMKV_KEY: "${MAKEMKV_KEY}"
       AMA_TMDB_API_KEY: "${TMDB_API_KEY}"
+      PUID: "1000"        # match the uid/gid that owns /media/library
+      PGID: "1000"        # on the host
     ports:
       - "8080:8080"
 ```
@@ -111,6 +113,16 @@ The image's `HEALTHCHECK` curls `127.0.0.1:${AMA_WEB_PORT:-8080}` — it cannot
 see a `web.port` set only in `ama.yaml`. If you change the listen port, set
 `AMA_WEB_PORT` to match (as in the environment block above) or the
 healthcheck will report `unhealthy` even though the server is up.
+
+The container starts as root and `docker-entrypoint.sh` remaps the image's
+`ama` user to `PUID`/`PGID` (default 1000:1000, the image's baked-in user)
+before dropping privileges via `gosu` — no uid/gid baked into the image at
+build time can match every host: a root-owned NAS mount, a second local
+account, and so on. Only `ama`'s own directories (`/home/ama`, `/config`) are
+re-owned on every container start; `/media/library` and `/tmp/ama` are not
+recursively `chown`ed, since that is normally a large volume and would slow
+every start down. Set `PUID`/`PGID` to match whatever already owns the
+library on the host instead of relying on AMA to fix it up.
 
 Then `docker compose build && docker compose up -d`, or without compose:
 
