@@ -59,7 +59,7 @@ type MakeMKV struct {
 type TMDB struct {
 	// APIKey is the TMDB read access token, sent as a bearer token.
 	APIKey string `yaml:"api_key"`
-	// AutoConfirmThreshold is the fuzzy-match confidence in [0,1] at or above
+	// AutoConfirmThreshold is the fuzzy-match confidence in (0,1] at or above
 	// which a candidate is auto-confirmed without a manual step. Nil means
 	// unset: every disc requires manual confirmation in the web UI.
 	AutoConfirmThreshold *float64 `yaml:"auto_confirm_threshold"`
@@ -196,8 +196,8 @@ func (c *Config) Validate() error {
 	if c.TMDB.APIKey == "" {
 		fail("tmdb.api_key is required")
 	}
-	if t := c.TMDB.AutoConfirmThreshold; t != nil && !(*t >= 0 && *t <= 1) {
-		fail("tmdb.auto_confirm_threshold must be between 0 and 1, got %v", *t)
+	if t := c.TMDB.AutoConfirmThreshold; t != nil && !(*t > 0 && *t <= 1) {
+		fail("tmdb.auto_confirm_threshold must be greater than 0 and at most 1 (0 would always auto-confirm), got %v", *t)
 	}
 	if c.MakeMKV.MinTrackDuration < 0 {
 		fail("makemkv.min_track_duration must not be negative, got %d", c.MakeMKV.MinTrackDuration)
