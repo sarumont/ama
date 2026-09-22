@@ -280,7 +280,7 @@ func reserveOutput(outPath string) (string, error) {
 	}
 	name := tmp.Name()
 	if err := tmp.Close(); err != nil {
-		os.Remove(name)
+		_ = os.Remove(name)
 		return "", fmt.Errorf("subtitle: closing %s: %w", name, err)
 	}
 	return name, nil
