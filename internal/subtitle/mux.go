@@ -91,6 +91,42 @@ func Mux(ctx context.Context, mkvPath string, sourceStreams []SubtitleStream, re
 // On success the consumed SRTs — which Converter.Convert deliberately leaves in
 // its temp dir — are deleted. On failure they are left alone so a retry does
 // not have to OCR them again.
+//
+// minMKVMergeVersion is the oldest mkvmerge this package supports.
+// --forced-display-flag and --default-track-flag are the v74 names for the
+// older --forced-track/--default-track; an mkvmerge older than that rejects
+// them outright and exits 2 — every single mux fails, with an error that
+// names the file rather than the tool version. Pinned as a hard requirement
+// per @sarumont rather than falling back to the deprecated spellings.
+const minMKVMergeVersion = 74
+
+// mkvmergeVersionPattern extracts the major version from mkvmerge --version
+// output, e.g. "mkvmerge v74.0.0 ('Panic Station') 64-bit".
+var mkvmergeVersionPattern = regexp.MustCompile(`\bv(\d+)\.`)
+
+// CheckTools reports whether mkvmerge is present and at least
+// minMKVMergeVersion, so the daemon can fail at startup with a clear version
+// error instead of every mux failing with mkvmerge's own "unknown option"
+// exit 2.
+func (m *Muxer) CheckTools(ctx context.Context) error {
+	out, err := m.runner().Run(ctx, m.mkvmerge(), "--version")
+	if err != nil {
+		return fmt.Errorf("subtitle: %s not found or not runnable: %w", m.mkvmerge(), err)
+	}
+	match := mkvmergeVersionPattern.FindSubmatch(out)
+	if match == nil {
+		return fmt.Errorf("subtitle: could not parse mkvmerge version from %q", strings.TrimSpace(string(out)))
+	}
+	major, err := strconv.Atoi(string(match[1]))
+	if err != nil {
+		return fmt.Errorf("subtitle: could not parse mkvmerge version from %q", strings.TrimSpace(string(out)))
+	}
+	if major < minMKVMergeVersion {
+		return fmt.Errorf("subtitle: mkvmerge %d found, need >= %d (older versions do not support --forced-display-flag/--default-track-flag)",
+			major, minMKVMergeVersion)
+	}
+	return nil
+}
 func (m *Muxer) Mux(ctx context.Context, mkvPath string, sourceStreams []SubtitleStream, results []ConversionResult) (string, error) {
 	converted := convertedResults(results)
 	if len(converted) == 0 {

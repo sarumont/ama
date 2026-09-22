@@ -22,7 +22,8 @@ Infrastructure background: Docker, Terraform, Kubernetes, OPNsense.
 - **Web**: `html/template` + HTMX (no JS framework)
 - **Config**: YAML via `gopkg.in/yaml.v3`
 - **External tools**: `makemkvcon`, `whipper`, `ffprobe`, `ffmpeg`,
-  `mkvmerge`, `mkvpropedit`, `tesseract` — all bundled in the container image
+  `mkvmerge` (>= 74), `mkvpropedit`, `tesseract` — all bundled in the
+  container image
 - **APIs**: TMDB (movie ID), MusicBrainz (via whipper), Radarr v3
 
 ## Architecture

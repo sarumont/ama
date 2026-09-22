@@ -39,7 +39,9 @@ the pipeline needs:
 - whipper
 - ffmpeg / ffprobe
 - tesseract-ocr — PGS subtitle OCR
-- mkvtoolnix — mkvpropedit / mkvmerge for subtitle muxing
+- mkvtoolnix >= 74 — mkvpropedit / mkvmerge for subtitle muxing (mkvmerge's
+  `--forced-display-flag`/`--default-track-flag` options were added in v74;
+  older versions reject them and every mux fails)
 
 Building this container image is itself a project deliverable.
 

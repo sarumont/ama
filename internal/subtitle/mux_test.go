@@ -490,6 +490,52 @@ func TestProcessedPath(t *testing.T) {
 	}
 }
 
+// funcRunner adapts a plain function to CommandRunner.
+type funcRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+func (f funcRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return f(ctx, name, args...)
+}
+
+func TestMuxerCheckTools(t *testing.T) {
+	tests := []struct {
+		name    string
+		out     string
+		runErr  error
+		wantErr string
+	}{
+		{name: "new enough", out: "mkvmerge v74.0.0 ('Panic Station') 64-bit\n"},
+		{name: "newer than minimum", out: "mkvmerge v92.0.0 64-bit\n"},
+		{name: "too old", out: "mkvmerge v69.0.0 ('Nice Try') 64-bit\n", wantErr: "need >= 74"},
+		{name: "not found", runErr: errors.New(`exec: "mkvmerge": executable file not found in $PATH`), wantErr: "not found or not runnable"},
+		{name: "unparseable version", out: "not a version string\n", wantErr: "could not parse mkvmerge version"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Muxer{Runner: funcRunner(func(_ context.Context, name string, args ...string) ([]byte, error) {
+				if name != "mkvmerge" || len(args) != 1 || args[0] != "--version" {
+					t.Fatalf("unexpected call: %s %v", name, args)
+				}
+				if tt.runErr != nil {
+					return nil, tt.runErr
+				}
+				return []byte(tt.out), nil
+			})}
+
+			err := m.CheckTools(context.Background())
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("CheckTools() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("CheckTools() = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // assertOnlyFiles fails when dir holds anything other than the named files,
 // catching both missing output and leftover temp files.
 func assertOnlyFiles(t *testing.T, dir string, want ...string) {
