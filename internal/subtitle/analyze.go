@@ -187,14 +187,14 @@ func writeFileAtomic(path string, data []byte) error {
 		return fmt.Errorf("subtitle: creating temp file in %s: %w", dir, err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("subtitle: writing %s: %w", tmpName, err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("subtitle: syncing %s: %w", tmpName, err)
 	}
 	if err := tmp.Close(); err != nil {
