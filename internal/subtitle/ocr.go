@@ -207,7 +207,7 @@ func (c *Converter) Convert(ctx context.Context, mkvPath string, streams []Subti
 // filename does (see scratchName for why).
 func (c *Converter) convertStream(ctx context.Context, mkvPath, dir string, s SubtitleStream) (string, error) {
 	rawSup := filepath.Join(dir, scratchBase(mkvPath, s.StreamIndex)+".sup")
-	defer os.Remove(rawSup)
+	defer func() { _ = os.Remove(rawSup) }()
 
 	if _, err := c.runner().Run(ctx, c.ffmpeg(),
 		"-nostdin",
@@ -251,14 +251,14 @@ func (c *Converter) convertStream(ctx context.Context, mkvPath, dir string, s Su
 func (c *Converter) ripLanguage(ctx context.Context, dir, mkvPath string, streamIndex int, lang string, raw []byte) (string, error) {
 	base := filepath.Join(dir, scratchName(mkvPath, streamIndex, lang))
 	supPath, srtPath := base+".sup", base+".srt"
-	defer os.Remove(supPath)
+	defer func() { _ = os.Remove(supPath) }()
 
 	if err := os.WriteFile(supPath, raw, 0o644); err != nil {
 		return "", fmt.Errorf("staging stream %d for %s: %w", streamIndex, lang, err)
 	}
 
 	if _, err := c.runner().Run(ctx, c.pgsrip(), "--force", "--language", lang, supPath); err != nil {
-		os.Remove(srtPath)
+		_ = os.Remove(srtPath)
 		return "", fmt.Errorf("OCRing stream %d (%s): %w", streamIndex, lang, err)
 	}
 
@@ -268,7 +268,7 @@ func (c *Converter) ripLanguage(ctx context.Context, dir, mkvPath string, stream
 	// really there and non-empty before reporting the stream converted.
 	st, err := os.Stat(srtPath)
 	if err != nil || st.Size() == 0 {
-		os.Remove(srtPath)
+		_ = os.Remove(srtPath)
 		return "", fmt.Errorf("OCRing stream %d (%s): pgsrip produced no usable %s",
 			streamIndex, lang, filepath.Base(srtPath))
 	}
