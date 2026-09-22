@@ -12,6 +12,11 @@ test:
 	$(GO) test ./... -race -cover
 
 lint:
+	@version=$$($(GOLANGCI_LINT) version --json 2>/dev/null | grep -o '"Version":"[^"]*"' | cut -d'"' -f4); \
+	case "$$version" in \
+		2.*) ;; \
+		*) echo "golangci-lint $$version found, need v2 (.golangci.yml uses the v2 schema)"; exit 1 ;; \
+	esac
 	$(GOLANGCI_LINT) run
 
 vet:
