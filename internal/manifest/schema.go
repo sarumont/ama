@@ -92,10 +92,14 @@ const (
 
 // Manifest is the complete record of one rip.
 type Manifest struct {
-	ID         string    `json:"id"`
-	AMAVersion string    `json:"ama_version"`
-	RippedAt   time.Time `json:"ripped_at"`
-	Status     Status    `json:"status"`
+	ID         string `json:"id"`
+	AMAVersion string `json:"ama_version"`
+	// DetectedAt is when the disc was detected and this manifest was created.
+	DetectedAt time.Time `json:"detected_at"`
+	// RippedAt is when ripping actually started, set by the caller once the
+	// disc is identified and the rip begins; zero until then.
+	RippedAt time.Time `json:"ripped_at"`
+	Status   Status    `json:"status"`
 
 	Disc           Disc           `json:"disc"`
 	Identification Identification `json:"identification"`
@@ -116,13 +120,15 @@ type Manifest struct {
 	Errors   []string `json:"errors"`
 }
 
-// New returns a manifest for a rip that is about to start: a fresh UUID, the
-// current time, the package version, and status pending_confirmation.
+// New returns a manifest for a disc that was just detected: a fresh UUID, the
+// current time as DetectedAt, the package version, and status
+// pending_confirmation. RippedAt is left zero; the caller sets it once ripping
+// actually starts.
 func New(discType DiscType, device string) *Manifest {
 	return &Manifest{
 		ID:         newUUID(),
 		AMAVersion: Version,
-		RippedAt:   time.Now().UTC(),
+		DetectedAt: time.Now().UTC(),
 		Status:     StatusPendingConfirmation,
 		Disc: Disc{
 			Type:   discType,

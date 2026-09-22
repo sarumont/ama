@@ -275,8 +275,11 @@ func TestNew(t *testing.T) {
 	if m.Status != StatusPendingConfirmation {
 		t.Errorf("Status = %q, want %q", m.Status, StatusPendingConfirmation)
 	}
-	if m.RippedAt.Before(before) || m.RippedAt.After(time.Now().UTC()) {
-		t.Errorf("RippedAt = %v, want a timestamp from this test", m.RippedAt)
+	if m.DetectedAt.Before(before) || m.DetectedAt.After(time.Now().UTC()) {
+		t.Errorf("DetectedAt = %v, want a timestamp from this test", m.DetectedAt)
+	}
+	if !m.RippedAt.IsZero() {
+		t.Errorf("RippedAt = %v, want zero — the caller sets it once ripping starts", m.RippedAt)
 	}
 	if m.Disc.Type != DiscTypeBluRay || m.Disc.Device != "/dev/sr0" {
 		t.Errorf("Disc = %+v", m.Disc)

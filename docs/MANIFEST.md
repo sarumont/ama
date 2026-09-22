@@ -22,6 +22,7 @@ tooling (subtitle OCR processor, Radarr integration, extras sorting workflow).
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "ama_version": "0.1.0",
+  "detected_at": "2026-08-19T14:20:00Z",
   "ripped_at": "2026-08-19T14:23:00Z",
   "status": "complete",
 
@@ -159,6 +160,7 @@ the other is left in its zero state. CD rips omit both blocks entirely.
 {
   "id": "...",
   "ama_version": "0.1.0",
+  "detected_at": "...",
   "ripped_at": "...",
   "status": "complete",
 
