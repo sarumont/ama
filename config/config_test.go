@@ -538,6 +538,11 @@ func TestValidate(t *testing.T) {
 			wantErr: []string{"tmdb.auto_confirm_threshold"},
 		},
 		{
+			name:    "auto confirm threshold zero",
+			mutate:  func(c *Config) { c.TMDB.AutoConfirmThreshold = floatPtr(0) },
+			wantErr: []string{"tmdb.auto_confirm_threshold"},
+		},
+		{
 			name:    "auto confirm threshold NaN",
 			mutate:  func(c *Config) { c.TMDB.AutoConfirmThreshold = floatPtr(math.NaN()) },
 			wantErr: []string{"tmdb.auto_confirm_threshold"},

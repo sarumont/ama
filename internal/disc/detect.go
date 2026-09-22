@@ -80,9 +80,16 @@ const (
 	DiscInserted EventType = iota
 	// DiscRemoved is emitted when a previously readable disc is gone.
 	DiscRemoved
-	// DriveError is emitted when a presence check fails. The Detector keeps
-	// polling; the drive state it was tracking is left unchanged.
+	// DriveError is emitted once when a presence check first starts failing.
+	// It is not repeated while the checks keep failing; another DriveError
+	// means the checks recovered and then failed again. The Detector keeps
+	// polling either way; the drive state it was tracking is left unchanged.
 	DriveError
+	// DriveStalled is emitted once when the drive has reported
+	// StatusNotReady for staleAfterNotReady consecutive polls, in case a
+	// disc never finishes spinning up (bad media, a dying drive). Not
+	// repeated while it stays not-ready.
+	DriveStalled
 )
 
 // String implements fmt.Stringer.
@@ -94,6 +101,8 @@ func (t EventType) String() string {
 		return "disc_removed"
 	case DriveError:
 		return "drive_error"
+	case DriveStalled:
+		return "drive_stalled"
 	default:
 		return fmt.Sprintf("unknown(%d)", int(t))
 	}
@@ -134,11 +143,8 @@ func (IoctlChecker) Status(device string) (DriveStatus, error) {
 	return DriveStatus(status), nil
 }
 
-// Eject opens the drive tray. It is the primitive behind disc.eject_on_complete
-// and is never called by the Detector itself — a disc that is ejected produces
-// a removal event like any other, and one that is not stays present without
-// producing a second insertion event.
-func Eject(device string) error {
+// ejectDevice opens the drive and issues CDROMEJECT.
+func ejectDevice(device string) error {
 	f, err := os.OpenFile(device, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", device, err)
@@ -151,12 +157,26 @@ func Eject(device string) error {
 	return nil
 }
 
+// eventBufferSize is a starting guess at how many events a slow consumer can
+// fall behind by before a send blocks and delays polling. Revisit with real
+// usage; see the tracking issue for identity-aware presence in case a
+// consumer needs to tell two different discs apart across a gap this large.
+const eventBufferSize = 16
+
 // Detector polls one optical drive and reports insertions and removals.
 type Detector struct {
-	device   string
-	interval time.Duration
-	checker  StatusChecker
-	events   chan Event
+	device             string
+	interval           time.Duration
+	staleAfterNotReady int
+	checker            StatusChecker
+	events             chan Event
+	ejectRequests      chan ejectRequest
+}
+
+// ejectRequest asks Run to eject the drive between polls, so the eject never
+// races a concurrent status check for the same device.
+type ejectRequest struct {
+	resp chan error
 }
 
 // minInterval is the smallest poll interval New accepts. time.NewTicker
@@ -165,28 +185,61 @@ type Detector struct {
 // crash the daemon.
 const minInterval = time.Second
 
+// defaultStaleAfterNotReady is how many consecutive StatusNotReady polls
+// New waits out before emitting DriveStalled when staleAfterNotReady is left
+// at zero. 12 polls at the default 5s poll interval is 60 seconds.
+const defaultStaleAfterNotReady = 12
+
 // New returns a Detector for device, polling every interval. A nil checker
-// selects IoctlChecker. A non-positive interval is clamped to minInterval.
-func New(device string, interval time.Duration, checker StatusChecker) *Detector {
+// selects IoctlChecker. A non-positive interval is clamped to minInterval. A
+// non-positive staleAfterNotReady selects defaultStaleAfterNotReady.
+func New(device string, interval time.Duration, checker StatusChecker, staleAfterNotReady int) *Detector {
 	if checker == nil {
 		checker = IoctlChecker{}
 	}
 	if interval <= 0 {
 		interval = minInterval
 	}
+	if staleAfterNotReady <= 0 {
+		staleAfterNotReady = defaultStaleAfterNotReady
+	}
 	return &Detector{
-		device:   device,
-		interval: interval,
-		checker:  checker,
-		events:   make(chan Event),
+		device:             device,
+		interval:           interval,
+		staleAfterNotReady: staleAfterNotReady,
+		checker:            checker,
+		events:             make(chan Event, eventBufferSize),
+		ejectRequests:      make(chan ejectRequest),
 	}
 }
 
 // Events returns the channel events are delivered on. It is closed when Run
-// returns. Sends are unbuffered, so a slow consumer delays polling rather than
-// dropping an insertion.
+// returns. Sends have eventBufferSize of headroom before they block and delay
+// polling.
 func (d *Detector) Events() <-chan Event {
 	return d.events
+}
+
+// Eject opens the drive tray. It is the primitive behind
+// disc.eject_on_complete. The request is serviced by Run — which must
+// already be running in another goroutine — between polls, so it never races
+// Run's own device access the way an independent open/CDROMEJECT can (the
+// drive reports EBUSY when use_count is already above one). A disc that is
+// ejected produces a removal event like any other; one that is not stays
+// present without producing a second insertion event.
+func (d *Detector) Eject(ctx context.Context) error {
+	req := ejectRequest{resp: make(chan error, 1)}
+	select {
+	case d.ejectRequests <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-req.resp:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Run polls until ctx is cancelled, then closes the events channel and
@@ -210,8 +263,18 @@ func (d *Detector) Run(ctx context.Context) {
 	// different disc inserted once it recovers is never announced.
 	const maxStaleChecks = 3
 	staleChecks := 0
+	// erroring tracks whether the last poll failed, so DriveError is emitted
+	// once on the transition into failing rather than on every failed poll.
+	erroring := false
+	// notReadyStreak counts consecutive StatusNotReady polls; stalledEmitted
+	// guards DriveStalled the same way erroring guards DriveError.
+	notReadyStreak := 0
+	stalledEmitted := false
 	for {
 		status, err := d.checker.Status(d.device)
+		if err == nil {
+			erroring = false
+		}
 		switch {
 		case err != nil:
 			// Surface it and keep polling: an unplugged or busy device is
@@ -221,37 +284,58 @@ func (d *Detector) Run(ctx context.Context) {
 			if staleChecks >= maxStaleChecks {
 				present = false
 			}
-			if !d.emit(ctx, Event{Type: DriveError, Device: d.device, Err: err}) {
-				return
+			wasErroring := erroring
+			erroring = true
+			if !wasErroring {
+				if !d.emit(ctx, Event{Type: DriveError, Device: d.device, Err: err}) {
+					return
+				}
 			}
 		case status == StatusNoInfo:
 			staleChecks++
 			if staleChecks >= maxStaleChecks {
 				present = false
 			}
+			notReadyStreak = 0
+			stalledEmitted = false
+		case status == StatusNotReady:
+			// A disc spinning up is not yet an insertion.
+			staleChecks = 0
+			notReadyStreak++
+			if notReadyStreak == d.staleAfterNotReady && !stalledEmitted {
+				stalledEmitted = true
+				if !d.emit(ctx, Event{Type: DriveStalled, Device: d.device}) {
+					return
+				}
+			}
 		case status == StatusDiscOK && !present:
 			staleChecks = 0
+			notReadyStreak = 0
+			stalledEmitted = false
 			present = true
 			if !d.emit(ctx, Event{Type: DiscInserted, Device: d.device}) {
 				return
 			}
 		case (status == StatusNoDisc || status == StatusTrayOpen) && present:
 			staleChecks = 0
+			notReadyStreak = 0
+			stalledEmitted = false
 			present = false
 			if !d.emit(ctx, Event{Type: DiscRemoved, Device: d.device}) {
 				return
 			}
 		default:
 			staleChecks = 0
+			notReadyStreak = 0
+			stalledEmitted = false
 		}
-		// StatusNotReady and StatusNoInfo are deliberately indeterminate: a
-		// disc spinning up is not yet an insertion, and a drive that briefly
-		// stops answering is not a removal.
 
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case req := <-d.ejectRequests:
+			req.resp <- ejectDevice(d.device)
 		}
 	}
 }
