@@ -244,7 +244,7 @@ func (c *Client) get(ctx context.Context, path string, params url.Values, out an
 		// credential-bearing parameter — into logs.
 		return fmt.Errorf("tmdb: requesting %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return apiError(resp)
