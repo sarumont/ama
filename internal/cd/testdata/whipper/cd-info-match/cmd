@@ -1,0 +1,10 @@
+# Hand-constructed sample, shaped after whipper 0.10.0 `whipper cd info`
+# output (see internal/testutil/testdata/examples/whipper/cd-info for the
+# original reference capture this mirrors). Exit 0: TOC read fine, whipper's
+# own lookup found a match -- irrelevant to Identify, which ignores this
+# text and does its own MusicBrainz lookup (see internal/cd's package doc).
+whipper
+cd
+info
+-d
+/dev/sr0

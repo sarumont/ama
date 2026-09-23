@@ -1,0 +1,10 @@
+# Hand-constructed sample. Exit 255: whipper's own MusicBrainz lookup found
+# no matching release for this disc id, which is a legitimate outcome of
+# `whipper cd info` even though the TOC read itself succeeded -- see the
+# issue #9 spike, section 3. Identify still succeeds here because a disc id
+# was printed to stdout before the non-zero exit.
+whipper
+cd
+info
+-d
+/dev/sr0
