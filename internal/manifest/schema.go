@@ -221,17 +221,22 @@ type Disc struct {
 }
 
 // Identification records how the disc was identified and against what.
-// The tmdb_id/imdb_id/title/confidence/candidates fields are Blu-ray only; the
-// mb_*/artist/album fields are CD only.
+// The tmdb_id/imdb_id/title/confidence fields are Blu-ray only; the
+// mb_*/artist/album fields are CD only. Candidates is populated by either
+// variant, holding TMDB matches for a Blu-ray or MusicBrainz releases for a
+// CD — see Candidate.
 type Identification struct {
 	// Method is the identification path, e.g. "bdmv+tmdb" or "musicbrainz".
 	Method string `json:"method"`
 
 	// Blu-ray identification.
-	TMDBID     *int        `json:"tmdb_id,omitempty"`
-	IMDbID     string      `json:"imdb_id,omitempty"`
-	Title      string      `json:"title,omitempty"`
-	Confidence *float64    `json:"confidence,omitempty"`
+	TMDBID     *int     `json:"tmdb_id,omitempty"`
+	IMDbID     string   `json:"imdb_id,omitempty"`
+	Title      string   `json:"title,omitempty"`
+	Confidence *float64 `json:"confidence,omitempty"`
+
+	// Candidates is Blu-ray (TMDB) or CD (MusicBrainz) ranked matches; see
+	// Candidate.
 	Candidates []Candidate `json:"candidates,omitempty"`
 
 	// CD identification.
@@ -249,12 +254,28 @@ type Identification struct {
 	ConfirmedBy string `json:"confirmed_by,omitempty"`
 }
 
-// Candidate is one ranked TMDB match for a disc.
+// Candidate is one ranked identification match for a disc: a TMDB match for a
+// Blu-ray or a MusicBrainz release for a CD. Like Track, it holds the union of
+// both field sets rather than being split into two parallel types — see the
+// package doc's "Blu-ray and CD variants" section. A Candidate cannot see its
+// parent Manifest, so which fields are populated is determined by whichever
+// identification method produced the candidate list (Identification.Method);
+// the BD fields are tagged omitempty since a CD candidate leaves them at their
+// zero value, and vice versa.
 type Candidate struct {
-	TMDBID int     `json:"tmdb_id"`
-	Title  string  `json:"title"`
-	Year   int     `json:"year"`
-	Score  float64 `json:"score"`
+	// Blu-ray (TMDB) fields.
+	TMDBID int    `json:"tmdb_id,omitempty"`
+	Title  string `json:"title,omitempty"`
+
+	// CD (MusicBrainz) fields.
+	MBReleaseID      string `json:"mb_release_id,omitempty"`
+	MBReleaseGroupID string `json:"mb_release_group_id,omitempty"`
+	Artist           string `json:"artist,omitempty"`
+	Album            string `json:"album,omitempty"`
+
+	// Shared.
+	Year  int     `json:"year,omitempty"`
+	Score float64 `json:"score"`
 }
 
 // Track is one ripped Blu-ray title or one ripped CD audio track. It holds the

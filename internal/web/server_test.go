@@ -49,10 +49,14 @@ func TestRoutes(t *testing.T) {
 		wantStatus int
 		wantBody   string
 	}{
-		{"queue", "/", http.StatusNotImplemented, "Queue"},
-		{"confirm", "/confirm/abc123", http.StatusNotImplemented, "Confirm abc123"},
-		{"history", "/history", http.StatusNotImplemented, "History"},
-		{"status", "/api/status/abc123", http.StatusNotImplemented, "not yet implemented"},
+		// With no output roots configured, newTestServer's config has no
+		// manifests to find: queue and history render their empty states,
+		// confirm and status 404 on the unknown id. See handlers_test.go for
+		// coverage of populated manifests.
+		{"queue", "/", http.StatusOK, "No disc in the drive"},
+		{"confirm", "/confirm/abc123", http.StatusNotFound, "Not Found"},
+		{"history", "/history", http.StatusOK, "Nothing has been ripped yet"},
+		{"status", "/api/status/abc123", http.StatusNotFound, "Unknown rip"},
 		{"static htmx", "/static/htmx.min.js", http.StatusOK, "htmx"},
 		{"unknown", "/nope", http.StatusNotFound, ""},
 		{"unknown under root", "/confirm", http.StatusNotFound, ""},
