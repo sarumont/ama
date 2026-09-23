@@ -1,0 +1,8 @@
+# Hand-constructed sample. Exit 1: no disc in the drive, so whipper never
+# gets far enough to print a MusicBrainz disc id line at all. This must be a
+# hard error, unlike the cd-info-no-match case.
+whipper
+cd
+info
+-d
+/dev/sr0

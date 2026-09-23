@@ -30,11 +30,16 @@ radarr:
   enabled: true
   url: http://radarr:7878
   api_key: ""
+  quality_profile_id: 0            # required when enabled; no safe default,
+                                    # find it via Radarr's own API/UI
 
 sonarr:
   enabled: false                   # v2
   url: http://sonarr:8989
   api_key: ""
+  quality_profile_id: 0            # required when enabled
+  language_profile_id: 0           # required when enabled (Sonarr v3 only;
+                                    # ignored by v4, harmless to set either way)
 
 web:
   port: 8080

@@ -1,26 +1,5 @@
-# AMA Manifest Schema
-
-Every rip produces a JSON manifest written alongside the output files.
-The manifest is the authoritative record of the rip and is used by downstream
-tooling (subtitle OCR processor, Radarr integration, extras sorting workflow).
-
-## Location
-
-```
-{output_path}/{Title} ({Year})/
-  {Title} ({Year}).mkv              ← main feature
-  {Title} ({Year}).subtitles.json   ← subtitle analysis
-  {Title} ({Year}).processed.mkv    ← post-OCR output
-  {Title} ({Year}).manifest.json    ← this file
-  extras/
-    ...
-```
-
-## Schema
-
-```json
 {
-  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "id": "11111111-1111-1111-1111-111111111111",
   "ama_version": "0.1.0",
   "detected_at": "2026-08-19T14:20:00Z",
   "ripped_at": "2026-08-19T14:23:00Z",
@@ -58,6 +37,17 @@ tooling (subtitle OCR processor, Radarr integration, extras sorting workflow).
       "role": "feature",
       "role_reason": "longest track",
       "output_file": "Iron Man 3 (2013).mkv",
+      "edition": null
+    },
+    {
+      "makemkv_index": 1,
+      "duration_seconds": 7200,
+      "size_bytes": 27000000000,
+      "audio_track_count": 2,
+      "chapter_count": 24,
+      "role": "alternate_cut",
+      "role_reason": "within 10% of feature duration",
+      "output_file": "extras/Iron Man 3 (2013)_t01.mkv",
       "edition": null
     },
     {
@@ -129,76 +119,3 @@ tooling (subtitle OCR processor, Radarr integration, extras sorting workflow).
   "warnings": [],
   "errors": []
 }
-```
-
-Blu-ray rips populate whichever of `radarr`/`sonarr` matches the content type;
-the other is left in its zero state. CD rips omit both blocks entirely.
-
-## Status Values
-
-| Status | Meaning |
-|--------|---------|
-| `pending_confirmation` | Waiting for user to confirm disc identification |
-| `ripping` | MakeMKV/whipper in progress |
-| `analyzing` | Subtitle analysis running |
-| `pending_ocr` | PGS → SRT OCR conversion in progress |
-| `complete` | All steps finished successfully |
-| `error` | One or more errors; see `errors` array |
-
-## Role Values (tracks)
-
-| Role | Meaning |
-|------|---------|
-| `feature` | Main feature — longest track |
-| `alternate_cut` | Within 10% of feature duration — flagged for review |
-| `commentary` | Secondary audio track identified as commentary |
-| `extra` | Below feature threshold — placed in extras/ |
-
-## CD Manifest
-
-```json
-{
-  "id": "...",
-  "ama_version": "0.1.0",
-  "detected_at": "...",
-  "ripped_at": "...",
-  "status": "complete",
-
-  "disc": {
-    "type": "cd",
-    "label": null,
-    "device": "/dev/sr0"
-  },
-
-  "identification": {
-    "method": "musicbrainz",
-    "mb_release_id": "...",
-    "mb_release_group_id": "...",
-    "artist": "Jamestown Revival",
-    "album": "The Education of a Wandering Man",
-    "year": 2014,
-    "confirmed": true,
-    "confirmed_at": "...",
-    "candidates": [
-      { "mb_release_id": "b3f0a4a1-4d05-4f2e-9c39-1f0d4a2f8c11", "mb_release_group_id": "6a1e9c2d-0f77-4a1b-8ef3-2b7c5d9e0a44", "artist": "Jamestown Revival", "album": "The Education of a Wandering Man", "year": 2014, "score": 0.94 }
-    ]
-  },
-
-  "tracks": [
-    {
-      "number": 1,
-      "title": "Where I Need to Be",
-      "duration_seconds": 207,
-      "accurate_rip": true,
-      "output_file": "01 - Where I Need to Be.flac"
-    }
-  ],
-
-  "output": {
-    "path": "/media/library/music/Jamestown Revival/The Education of a Wandering Man/"
-  },
-
-  "warnings": [],
-  "errors": []
-}
-```
