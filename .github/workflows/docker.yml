@@ -42,7 +42,24 @@ jobs:
           context: .
           file: Dockerfile.base
           push: false
+          load: true
           tags: ama-base:ci
+
+      # Enforces the #52 acceptance criteria that were previously only
+      # asserted in prose: ama-base must contain no MakeMKV binary, and must
+      # actually contain everything else the pipeline shells out to.
+      - name: Smoke test ama-base image
+        run: |
+          docker run --rm ama-base:ci sh -c '
+            set -eu
+            if command -v makemkvcon >/dev/null; then
+              echo "ERROR: makemkvcon must not be present in ama-base" >&2
+              exit 1
+            fi
+            for bin in ama ffmpeg ffprobe mkvmerge mkvpropedit tesseract whipper pgsrip; do
+              command -v "$bin" >/dev/null || { echo "ERROR: $bin missing from ama-base" >&2; exit 1; }
+            done
+          '
 
   publish-base:
     name: publish ama-base to GHCR
