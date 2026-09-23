@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -95,6 +96,109 @@ func TestViewsRenderTemplate(t *testing.T) {
 			t.Errorf("body does not contain %q\ngot: %s", want, body)
 		}
 	}
+}
+
+// TestLayoutZeroValue proves the layout renders with no template execution
+// error when handed a completely zero-value view model — the AC for #24 —
+// and that a populated CurrentPath marks the matching nav link active.
+func TestLayoutZeroValue(t *testing.T) {
+	srv := newTestServer(t)
+	tmpl := srv.pages["placeholder.html"]
+
+	type viewModel struct {
+		Title       string
+		Message     string
+		CurrentPath string
+	}
+
+	t.Run("zero value", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := tmpl.ExecuteTemplate(&buf, "layout", viewModel{}); err != nil {
+			t.Fatalf("ExecuteTemplate with zero-value data: %v", err)
+		}
+		body := buf.String()
+		if strings.Contains(body, `class="active"`) {
+			t.Errorf("zero-value CurrentPath should mark no nav link active, got: %s", body)
+		}
+	})
+
+	t.Run("active nav", func(t *testing.T) {
+		var buf bytes.Buffer
+		data := viewModel{Title: "Queue", CurrentPath: "/"}
+		if err := tmpl.ExecuteTemplate(&buf, "layout", data); err != nil {
+			t.Fatalf("ExecuteTemplate: %v", err)
+		}
+		if !strings.Contains(buf.String(), `<a href="/" class="active"`) {
+			t.Errorf("CurrentPath=/ should mark the Queue link active, got: %s", buf.String())
+		}
+	})
+}
+
+// TestStatusBadgePartial covers the six manifest statuses from
+// docs/MANIFEST.md plus the zero-value (empty string) case, which must
+// render an "Unknown" badge rather than erroring.
+func TestStatusBadgePartial(t *testing.T) {
+	srv := newTestServer(t)
+	tmpl := srv.pages["placeholder.html"]
+
+	tests := []struct {
+		status string
+		want   string
+	}{
+		{"pending_confirmation", "badge-pending-confirmation"},
+		{"ripping", "badge-ripping"},
+		{"analyzing", "badge-analyzing"},
+		{"pending_ocr", "badge-pending-ocr"},
+		{"complete", "badge-complete"},
+		{"error", "badge-error"},
+		{"", "badge-unknown"},
+		{"some-future-status", "badge-unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := tmpl.ExecuteTemplate(&buf, "status-badge", tt.status); err != nil {
+				t.Fatalf("ExecuteTemplate(status-badge, %q): %v", tt.status, err)
+			}
+			if !strings.Contains(buf.String(), tt.want) {
+				t.Errorf("status-badge(%q) = %q, want to contain %q", tt.status, buf.String(), tt.want)
+			}
+		})
+	}
+}
+
+// TestWarningsPartial proves the shared warnings/errors partial renders with
+// no error given a zero-value (nil-slice) manifest and given populated data.
+func TestWarningsPartial(t *testing.T) {
+	srv := newTestServer(t)
+	tmpl := srv.pages["placeholder.html"]
+
+	type manifest struct {
+		Warnings []string
+		Errors   []string
+	}
+
+	t.Run("zero value", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := tmpl.ExecuteTemplate(&buf, "warnings", manifest{}); err != nil {
+			t.Fatalf("ExecuteTemplate with zero-value manifest: %v", err)
+		}
+		if strings.Contains(buf.String(), "<li") {
+			t.Errorf("zero-value manifest should render no list items, got: %s", buf.String())
+		}
+	})
+
+	t.Run("populated", func(t *testing.T) {
+		var buf bytes.Buffer
+		data := manifest{Warnings: []string{"disc label unreadable"}, Errors: []string{"tmdb lookup failed"}}
+		if err := tmpl.ExecuteTemplate(&buf, "warnings", data); err != nil {
+			t.Fatalf("ExecuteTemplate: %v", err)
+		}
+		body := buf.String()
+		if !strings.Contains(body, "disc label unreadable") || !strings.Contains(body, "tmdb lookup failed") {
+			t.Errorf("body missing warning/error text: %s", body)
+		}
+	})
 }
 
 func TestStartShutsDownOnContextCancel(t *testing.T) {
