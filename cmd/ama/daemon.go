@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -136,20 +137,33 @@ func (d *daemon) checkTools(ctx context.Context) error {
 // server or the pipeline loop itself is returned; a failure ripping one
 // disc is not — see runPipeline and handleDisc, which keep the daemon alive
 // through anything short of ctx cancellation.
+//
+// pipelineCtx is a child of ctx, cancelled either by ctx itself or the
+// moment the web server exits for any reason (including a bind failure).
+// Without that, a bind failure would leave the detector and pipeline
+// running headless indefinitely — nothing surfaces the confirm/queue UI,
+// but a disc could still be detected and ripped with no way to ever confirm
+// its identification — until a human notices and sends SIGINT. run should
+// wind down promptly instead, the same way it does for any other fatal
+// startup condition.
 func (d *daemon) run(ctx context.Context) error {
+	pipelineCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var wg sync.WaitGroup
 	var webErr error
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer cancel()
 		webErr = d.web.Start(ctx)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		d.detector.Run(ctx)
+		d.detector.Run(pipelineCtx)
 	}()
 
 	select {
@@ -158,7 +172,7 @@ func (d *daemon) run(ctx context.Context) error {
 	}
 	d.log.Info("web server ready", "addr", d.web.Addr())
 
-	d.runPipeline(ctx)
+	d.runPipeline(pipelineCtx)
 
 	wg.Wait()
 	if webErr != nil {
@@ -278,13 +292,27 @@ func (d *daemon) waitForConfirmation(ctx context.Context, path string) (*manifes
 // manifest.Update's own path parameter does not follow automatically once
 // those fields change. If the canonical path is unchanged (confirmation set
 // no naming field, which should not normally happen) this is a no-op.
+//
+// If a manifest already exists at the canonical path — re-ripping a disc
+// that was already archived is a legitimate scenario for a preservation
+// tool — relocate refuses to touch it rather than silently overwriting a
+// prior completed rip's manifest (and, since the caller then proceeds to
+// rip into that same directory, its media files too). The caller is
+// expected to abort the disc on any error from relocate; on every error
+// path here the returned path is still oldPath's valid, already-written
+// manifest, so the caller can record the error there.
 func relocate(root string, m *manifest.Manifest, oldPath string) (newPath string, err error) {
 	newPath = manifest.Path(root, m)
 	if newPath == oldPath {
 		return oldPath, nil
 	}
+	if _, statErr := os.Stat(newPath); statErr == nil {
+		return oldPath, fmt.Errorf("manifest already exists at %s; refusing to overwrite an existing rip", newPath)
+	} else if !os.IsNotExist(statErr) {
+		return oldPath, fmt.Errorf("checking for an existing manifest at %s: %w", newPath, statErr)
+	}
 	if err := manifest.Write(newPath, m); err != nil {
-		return "", fmt.Errorf("writing manifest at its confirmed location %s: %w", newPath, err)
+		return oldPath, fmt.Errorf("writing manifest at its confirmed location %s: %w", newPath, err)
 	}
 	oldDir := parentDir(oldPath)
 	if err := removeFileAndEmptyDir(oldPath, oldDir); err != nil {

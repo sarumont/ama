@@ -52,6 +52,41 @@ func TestOutputFileName(t *testing.T) {
 	}
 }
 
+func TestRipToSourceIndex(t *testing.T) {
+	// Mirrors the MakeMKV forum's own example of --minlength's compaction:
+	// with a threshold that excludes everything but titles 5 and 12, title
+	// #5 becomes rip index 0 and title #12 becomes rip index 1.
+	allTracks := []bluray.Track{
+		{Index: 0, DurationSeconds: 45},   // menu loop, below threshold
+		{Index: 1, DurationSeconds: 30},   // transition, below threshold
+		{Index: 5, DurationSeconds: 200},  // survives
+		{Index: 9, DurationSeconds: 50},   // below threshold
+		{Index: 12, DurationSeconds: 300}, // survives
+	}
+
+	got := ripToSourceIndex(allTracks, 60)
+	want := map[int]int{0: 5, 1: 12}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ripToSourceIndex() = %v, want %v", got, want)
+	}
+}
+
+func TestRipToSourceIndexNoFiltering(t *testing.T) {
+	// minTrackDuration of 0 filters nothing, so rip indices equal source
+	// indices one-to-one, matching Rip()'s own args logic (MinLengthSeconds
+	// >= 0 still passes --minlength=0 to makemkvcon).
+	allTracks := []bluray.Track{
+		{Index: 0, DurationSeconds: 45},
+		{Index: 1, DurationSeconds: 7200},
+	}
+
+	got := ripToSourceIndex(allTracks, 0)
+	want := map[int]int{0: 0, 1: 1}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ripToSourceIndex() = %v, want %v", got, want)
+	}
+}
+
 func TestRelativeToRoot(t *testing.T) {
 	tests := []struct {
 		name string

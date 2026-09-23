@@ -106,7 +106,8 @@ func (d *daemon) ripBluRay(ctx context.Context, device string, mounted disc.Moun
 
 	path, err = relocate(root, m, path)
 	if err != nil {
-		d.log.Error("relocating manifest after confirmation", "path", path, "err", err)
+		recordError(path, d.log, "relocating manifest after confirmation", err)
+		return
 	}
 
 	source := "dev:" + device
@@ -136,25 +137,39 @@ func (d *daemon) ripBluRay(ctx context.Context, device string, mounted disc.Moun
 	dir := manifest.Dir(root, m)
 	base := filepath.Base(dir)
 
+	// makemkvcon's --minlength drops every title under the threshold before
+	// assigning indices to whatever remains, so Rip()'s track indices are
+	// compacted relative to Info()'s absolute ones whenever any title on the
+	// disc falls short of makemkv.min_track_duration — the common case (menu
+	// loops, transitions). classByIndex is keyed by Info()'s absolute
+	// indices, so it cannot be looked up with Rip()'s directly; ripToSource
+	// reverses the compaction. See ripToSourceIndex's doc comment.
+	ripToSource := ripToSourceIndex(allTracks, d.cfg.MakeMKV.MinTrackDuration)
+
 	var manifestTracks []manifest.Track
 	var mainFeaturePath, mainFeatureRel string
 	rippedIndex := make(map[int]bool, len(rippedTracks))
 	for _, t := range rippedTracks {
-		rippedIndex[t.Index] = true
-		cls, ok := classByIndex[t.Index]
+		sourceIndex, ok := ripToSource[t.Index]
 		if !ok {
-			recordWarning(path, d.log, fmt.Sprintf("ripped title index %d has no classification, skipping", t.Index))
+			recordWarning(path, d.log, fmt.Sprintf("ripped title index %d has no corresponding source title, skipping", t.Index))
+			continue
+		}
+		rippedIndex[sourceIndex] = true
+		cls, ok := classByIndex[sourceIndex]
+		if !ok {
+			recordWarning(path, d.log, fmt.Sprintf("ripped title index %d (source title %d) has no classification, skipping", t.Index, sourceIndex))
 			continue
 		}
 
-		relName := outputFileName(base, t.Index, cls)
+		relName := outputFileName(base, sourceIndex, cls)
 		dest := filepath.Join(dir, relName)
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			recordError(path, d.log, fmt.Sprintf("creating output directory for track %d", t.Index), err)
+			recordError(path, d.log, fmt.Sprintf("creating output directory for track %d", sourceIndex), err)
 			continue
 		}
 		if err := moveFile(t.OutputPath, dest); err != nil {
-			recordError(path, d.log, fmt.Sprintf("moving ripped track %d into place", t.Index), err)
+			recordError(path, d.log, fmt.Sprintf("moving ripped track %d into place", sourceIndex), err)
 			continue
 		}
 
@@ -163,7 +178,7 @@ func (d *daemon) ripBluRay(ctx context.Context, device string, mounted disc.Moun
 			e := cls.Edition
 			edition = &e
 		}
-		index, size, audioCount, chapters := t.Index, t.SizeBytes, t.AudioTrackCount, t.ChapterCount
+		index, size, audioCount, chapters := sourceIndex, t.SizeBytes, t.AudioTrackCount, t.ChapterCount
 		manifestTracks = append(manifestTracks, manifest.Track{
 			MakeMKVIndex:    &index,
 			SizeBytes:       &size,
@@ -321,18 +336,18 @@ func (d *daemon) notifyRadarr(ctx context.Context, manifestPath string) {
 
 // finish marks the manifest complete, unless something already marked it
 // error — a rip that failed partway through must not have that overwritten
-// by a blanket "it's done" at the end of the pipeline.
+// by a blanket "it's done" at the end of the pipeline. The check and the
+// write happen inside one Update call (rather than a preceding Read plus a
+// separate Update) so a concurrent web-UI write to the same manifest cannot
+// land in between them and get silently clobbered: manifest.Update takes
+// this path's lock for the whole read-modify-write, but a check made before
+// calling it is not covered by that lock.
 func (d *daemon) finish(manifestPath string) {
-	m, err := manifest.Read(manifestPath)
-	if err != nil {
-		d.log.Error("reading manifest to finish", "path", manifestPath, "err", err)
-		return
-	}
-	if m.Status == manifest.StatusError {
-		return
-	}
 	now := time.Now().UTC()
 	if err := manifest.Update(manifestPath, func(mm *manifest.Manifest) error {
+		if mm.Status == manifest.StatusError {
+			return nil
+		}
 		mm.Status = manifest.StatusComplete
 		mm.RippedAt = now
 		return nil
@@ -386,7 +401,8 @@ func (d *daemon) ripCD(ctx context.Context, device string) {
 
 	path, err = relocate(root, m, path)
 	if err != nil {
-		d.log.Error("relocating manifest after confirmation", "path", path, "err", err)
+		recordError(path, d.log, "relocating manifest after confirmation", err)
+		return
 	}
 
 	// The confirmed release must be one of the candidates Identify actually
@@ -511,6 +527,37 @@ func subtitlesToManifest(streams []subtitle.SubtitleStream) []manifest.Subtitle 
 			Converted:             s.Converted,
 			ConversionError:       s.ConversionError,
 		})
+	}
+	return out
+}
+
+// ripToSourceIndex maps a title index as Rip() (and thus rippedTracks)
+// reports it back to the absolute index Info() (and thus classByIndex) uses.
+// MakeMKV's --minlength option filters out titles under the threshold
+// *before* numbering whatever remains — confirmed against MakeMKV's own
+// support forum ("filtering out titles with a smaller length happens before
+// numbering the titles"; e.g. with --minlength=1800, "Title #5 becomes
+// title id 0 and Title #12 becomes title id 1") — so Rip()'s indices are
+// compacted relative to Info()'s absolute ones whenever any title falls
+// under minTrackDuration, not just reused as-is. That filter looks only at
+// raw duration, with no notion of "commentary" (bluray.Classify's exemption
+// that keeps a short commentary track classified "commentary" rather than
+// "skip" does not save it from makemkvcon's own --minlength), so the
+// reconstruction here must do the same: filter purely on duration, not on
+// the classified role.
+//
+// allTracks must be in ascending Index order, which is what Client.Info
+// returns (collectTracks sorts by index) — the order --minlength's own
+// compaction preserves for whatever survives it.
+func ripToSourceIndex(allTracks []bluray.Track, minTrackDuration int) map[int]int {
+	out := make(map[int]int)
+	next := 0
+	for _, t := range allTracks {
+		if t.DurationSeconds < minTrackDuration {
+			continue
+		}
+		out[next] = t.Index
+		next++
 	}
 	return out
 }

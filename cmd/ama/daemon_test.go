@@ -48,6 +48,50 @@ func TestRelocate(t *testing.T) {
 	}
 }
 
+func TestRelocateRefusesToOverwriteExistingRip(t *testing.T) {
+	root := t.TempDir()
+
+	// A prior, already-completed rip already occupies the canonical path.
+	existing := manifest.New(manifest.DiscTypeBluRay, "/dev/sr0")
+	existing.Identification.Title = "Iron Man 3"
+	existing.Identification.Year = 2013
+	canonicalPath := manifest.Path(root, existing)
+	if err := manifest.Write(canonicalPath, existing); err != nil {
+		t.Fatalf("writing existing manifest: %v", err)
+	}
+
+	// A re-rip of the same movie starts at its own pre-confirmation path.
+	m := manifest.New(manifest.DiscTypeBluRay, "/dev/sr0")
+	oldPath := manifest.Path(root, m)
+	if err := manifest.Write(oldPath, m); err != nil {
+		t.Fatalf("writing initial manifest: %v", err)
+	}
+	m.Identification.Title = "Iron Man 3"
+	m.Identification.Year = 2013
+
+	gotPath, err := relocate(root, m, oldPath)
+	if err == nil {
+		t.Fatal("relocate: want an error when the canonical path already exists, got nil")
+	}
+	if gotPath != oldPath {
+		t.Errorf("relocate() path = %q, want unchanged %q so the caller can still record the error", gotPath, oldPath)
+	}
+
+	// The prior rip's manifest must be untouched.
+	got, rerr := manifest.Read(canonicalPath)
+	if rerr != nil {
+		t.Fatalf("reading existing manifest: %v", rerr)
+	}
+	if got.ID != existing.ID {
+		t.Errorf("existing manifest at canonical path was overwritten: id = %q, want %q", got.ID, existing.ID)
+	}
+
+	// The re-rip's own manifest must still be readable at oldPath.
+	if _, rerr := manifest.Read(oldPath); rerr != nil {
+		t.Errorf("re-rip's manifest at oldPath is gone: %v", rerr)
+	}
+}
+
 func TestRelocateNoOpWhenPathUnchanged(t *testing.T) {
 	root := t.TempDir()
 	m := manifest.New(manifest.DiscTypeCD, "/dev/sr0")
