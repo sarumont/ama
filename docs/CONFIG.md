@@ -70,11 +70,33 @@ AMA_WEB_PORT=9090
 
 ## Docker Compose Example
 
-The image is **built locally, never pulled**. MakeMKV's binary package is not
-freely redistributable, so the Dockerfile downloads and compiles MakeMKV at
-build time and no image with MakeMKV in it is published anywhere. The build
-therefore requires you to accept the [MakeMKV EULA](https://www.makemkv.com/eula/)
-explicitly via a build arg.
+The final image (`ama:latest`, with MakeMKV) is **always built locally, never
+pulled**. MakeMKV's binary package is not freely redistributable, so the
+top-level `Dockerfile` downloads and compiles MakeMKV at build time and no
+image with MakeMKV in it is published anywhere. The build therefore requires
+you to accept the [MakeMKV EULA](https://www.makemkv.com/eula/) explicitly
+via a build arg.
+
+Everything *except* MakeMKV — whipper, ffmpeg, mkvtoolnix, tesseract, pgsrip,
+the compiled `ama` binary — lives in a separate, publishable `ama-base` image
+that CI builds and pushes to `ghcr.io/sarumont/ama-base` on every merge to
+`main` (see `.github/workflows/docker.yml` and `Dockerfile.base`'s header
+comment). The top-level `Dockerfile` layers MakeMKV on top of it. Two ways to
+build:
+
+- **Pull `ama-base`, build MakeMKV locally (default, fast).** The plain
+  `docker build` below pulls `ghcr.io/sarumont/ama-base:latest` for its base
+  layer and only compiles MakeMKV itself.
+- **Build everything from scratch, including `ama-base` (fully
+  offline-auditable).** For anyone who doesn't want to trust the published
+  base, build it yourself first and point the final build at that local tag:
+
+  ```
+  docker build -f Dockerfile.base -t ama-base:local .
+  docker build --build-arg MAKEMKV_ACCEPT_EULA=yes \
+               --build-arg AMA_BASE_IMAGE=ama-base:local \
+               -t ama:latest .
+  ```
 
 ```yaml
 services:
@@ -132,12 +154,21 @@ docker build --build-arg MAKEMKV_ACCEPT_EULA=yes -t ama:latest .
 
 ### Build Arguments
 
+**Top-level `Dockerfile`:**
+
 | Arg | Default | Purpose |
 |---|---|---|
+| `AMA_BASE_IMAGE` | `ghcr.io/sarumont/ama-base:latest` | Base image the final image is layered on. Point at a locally built `ama-base:local` to build fully from scratch |
 | `MAKEMKV_ACCEPT_EULA` | `no` | Must be `yes`; the build fails otherwise |
 | `MAKEMKV_VERSION` | `1.18.4` | MakeMKV beta builds expire ~60 days after release — bump this and rebuild when `makemkvcon` reports an expired version |
+
+**`Dockerfile.base` (only needed if building `ama-base` yourself):**
+
+| Arg | Default | Purpose |
+|---|---|---|
 | `TESSERACT_LANGS` | `eng osd fra deu spa ita jpn` | Tesseract language packs bundled into the image |
 | `PGSRIP_VERSION` | `0.1.12` | pgsrip release used for PGS → SRT |
+| `WHIPPER_VERSION` | `0.10.0-5+b3` | Exact installable Debian *binary* package version of whipper (not just the source version — a binNMU rebuild can append `+bN`). Pinned rather than a bare `apt-get install whipper` for reproducibility and to match the whipper 0.10.0 output shape `internal/testutil/testdata/examples/whipper/` fixtures assume (#9) |
 
 `subtitle.ocr_languages` may only name languages present in `TESSERACT_LANGS` —
 the set is fixed at build time and AMA fails fast at startup on an unknown
