@@ -12,9 +12,23 @@
 
   The candidate-select, role-override and forced-subtitle controls below
   POST to /confirm/:id, /api/tracks/:id/:index/role and
-  /api/subtitles/:id/:stream_index/forced — the endpoints #23 will add.
-  Those routes don't exist yet, so submitting any of these forms today 404s;
-  the markup is wired ahead of time so #23 only has to add the handlers.
+  /api/subtitles/:id/:stream_index/forced (#23). The candidate-select and
+  manual-search forms target the whole body (hx-target="body") — the
+  response is a full re-render of this page via the same handler/view
+  helpers GET uses, so htmx's fragment parser absorbs the html/head/body
+  wrapper and everything updates: identification, status, and the
+  tracks/subtitles tables. The per-row role-override and forced-subtitle
+  forms target their own row (hx-target="closest tr", hx-swap="outerHTML"
+  so a class change like row-flagged is picked up too) via the "track-row"
+  and "subtitle-row" named templates below, which the handlers also render
+  standalone for that swap.
+
+  Once a manifest's status is complete or error, #23 locks role-override
+  and forced-subtitle edits (rejected 409 server-side — no precedent in
+  this codebase for safely re-running the downstream remux/Radarr-scan
+  steps an edit after handoff would imply) and these controls render as
+  disabled text instead of a form; see trackRow/subtitleRow.Locked in
+  handlers.go.
 */}}
 
 {{define "title"}}Confirm — {{.DiscLabel}}{{end}}
@@ -92,27 +106,7 @@
     {{if eq .Manifest.Disc.Type "bluray"}}
     <thead><tr><th>Index</th><th>Duration</th><th>Size</th><th>Role</th><th>Reason</th><th>Output</th><th>Override role</th></tr></thead>
     <tbody>
-      {{range .Tracks}}
-      <tr{{if .Flagged}} class="row-flagged"{{end}}>
-        <td>{{.IndexDisplay}}</td>
-        <td>{{.DurationDisplay}}</td>
-        <td>{{.SizeDisplay}}</td>
-        <td>{{.Role}}{{if .Flagged}} <span class="flag">Needs review — alternate cut</span>{{end}}</td>
-        <td>{{.RoleReason}}</td>
-        <td>{{.OutputFile}}</td>
-        <td>
-          <form hx-post="/api/tracks/{{$.Manifest.ID}}/{{.IndexDisplay}}/role" hx-target="closest tr">
-            <select name="role">
-              <option value="feature"{{if eq .Role "feature"}} selected{{end}}>feature</option>
-              <option value="alternate_cut"{{if eq .Role "alternate_cut"}} selected{{end}}>alternate_cut</option>
-              <option value="commentary"{{if eq .Role "commentary"}} selected{{end}}>commentary</option>
-              <option value="extra"{{if eq .Role "extra"}} selected{{end}}>extra</option>
-            </select>
-            <button type="submit">Update</button>
-          </form>
-        </td>
-      </tr>
-      {{end}}
+      {{range .Tracks}}{{template "track-row" .}}{{end}}
     </tbody>
     {{else}}
     <thead><tr><th>#</th><th>Title</th><th>Duration</th><th>AccurateRip</th><th>Output</th></tr></thead>
@@ -141,22 +135,7 @@
   <table>
     <thead><tr><th>Stream</th><th>Codec</th><th>Lang</th><th>Size</th><th>Forced</th><th>Reason</th><th>Set forced</th></tr></thead>
     <tbody>
-      {{range .Subtitles}}
-      <tr>
-        <td>{{.StreamIndex}}</td>
-        <td>{{.Codec}}</td>
-        <td>{{.Language}}</td>
-        <td>{{.SizeDisplay}}</td>
-        <td>{{if .ForcedCandidate}}Yes{{else}}No{{end}}</td>
-        <td>{{.ForcedReasonDisplay}}</td>
-        <td>
-          <form hx-post="/api/subtitles/{{$.Manifest.ID}}/{{.StreamIndex}}/forced" hx-target="closest tr">
-            <input type="hidden" name="forced" value="{{if .ForcedCandidate}}false{{else}}true{{end}}">
-            <button type="submit">{{if .ForcedCandidate}}Clear{{else}}Set{{end}} forced</button>
-          </form>
-        </td>
-      </tr>
-      {{end}}
+      {{range .Subtitles}}{{template "subtitle-row" .}}{{end}}
     </tbody>
   </table>
   {{else}}
@@ -164,4 +143,58 @@
   {{end}}
 </section>
 {{end}}
+{{end}}
+
+{{/*
+  track-row/subtitle-row are one <tr> each, self-contained (ManifestID and
+  Locked travel on the row itself — see trackRow/subtitleRow in
+  handlers.go) so a handler can render exactly one of them as the
+  hx-swap="outerHTML" response for its own POST, as well as being used
+  inline by the range loops above.
+*/}}
+{{define "track-row"}}
+<tr{{if .Flagged}} class="row-flagged"{{end}}>
+  <td>{{.IndexDisplay}}</td>
+  <td>{{.DurationDisplay}}</td>
+  <td>{{.SizeDisplay}}</td>
+  <td>{{.Role}}{{if .Flagged}} <span class="flag">Needs review — alternate cut</span>{{end}}</td>
+  <td>{{.RoleReason}}</td>
+  <td>{{.OutputFile}}</td>
+  <td>
+    {{if .Locked}}
+    <span class="locked">Locked — rip complete</span>
+    {{else}}
+    <form hx-post="/api/tracks/{{.ManifestID}}/{{.IndexDisplay}}/role" hx-target="closest tr" hx-swap="outerHTML">
+      <select name="role">
+        <option value="feature"{{if eq .Role "feature"}} selected{{end}}>feature</option>
+        <option value="alternate_cut"{{if eq .Role "alternate_cut"}} selected{{end}}>alternate_cut</option>
+        <option value="commentary"{{if eq .Role "commentary"}} selected{{end}}>commentary</option>
+        <option value="extra"{{if eq .Role "extra"}} selected{{end}}>extra</option>
+      </select>
+      <button type="submit">Update</button>
+    </form>
+    {{end}}
+  </td>
+</tr>
+{{end}}
+
+{{define "subtitle-row"}}
+<tr>
+  <td>{{.StreamIndex}}</td>
+  <td>{{.Codec}}</td>
+  <td>{{.Language}}</td>
+  <td>{{.SizeDisplay}}</td>
+  <td>{{if .ForcedCandidate}}Yes{{else}}No{{end}}</td>
+  <td>{{.ForcedReasonDisplay}}</td>
+  <td>
+    {{if .Locked}}
+    <span class="locked">Locked — rip complete</span>
+    {{else}}
+    <form hx-post="/api/subtitles/{{.ManifestID}}/{{.StreamIndex}}/forced" hx-target="closest tr" hx-swap="outerHTML">
+      <input type="hidden" name="forced" value="{{if .ForcedCandidate}}false{{else}}true{{end}}">
+      <button type="submit">{{if .ForcedCandidate}}Clear{{else}}Set{{end}} forced</button>
+    </form>
+    {{end}}
+  </td>
+</tr>
 {{end}}
