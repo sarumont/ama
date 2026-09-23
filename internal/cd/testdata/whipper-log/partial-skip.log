@@ -1,0 +1,25 @@
+# Hand-constructed sample, shaped after whipper 0.10.0's rip log.
+# Exit 5: track 2 was skipped (only reachable because AMA always passes -k).
+Tracks:
+  1:
+    Filename: /music/Flaky Disc/Flaky Album/01 - Good Track.flac
+    Peak level: 0.921212
+    Extraction quality: 100.00 %
+    Test CRC: 1A2B3C4D
+    Copy CRC: 1A2B3C4D
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 5
+      Local CRC: AABBCCDD
+      Remote CRC: AABBCCDD
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 4
+      Local CRC: 11335577
+      Remote CRC: 11335577
+    Status: Copy OK
+  2:
+    Status: Track not ripped (skipped)
+Conclusive status report:
+  AccurateRip summary: Some tracks could not be verified as accurate (1/2 got no match)
+  Health status: Some tracks were not ripped (skipped)
