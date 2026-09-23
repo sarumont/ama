@@ -1,0 +1,164 @@
+# syntax=docker/dockerfile:1
+
+# AMA — Automated Media Archiver — publishable base image
+#
+# This is the "everything except MakeMKV" half of the split described in the
+# Dockerfile's own header comment: whipper, ffmpeg/ffprobe, mkvmerge/
+# mkvpropedit, tesseract, pgsrip, and the compiled `ama` binary are all
+# freely redistributable, so this image (unlike the full local build) can be
+# published to a registry. It is built and pushed to `ghcr.io/sarumont/ama-base`
+# by .github/workflows/docker.yml on every merge to main.
+#
+# Two-file shape: this file builds `ama-base`. The top-level `Dockerfile`
+# adds MakeMKV on top of it (`FROM ghcr.io/sarumont/ama-base:...`) to produce
+# the full local image — see that file's header for why MakeMKV can't live
+# here. Build this file directly only to produce `ama-base` itself:
+#
+#     docker build -f Dockerfile.base -t ama-base:local .
+#
+# Most users don't need to: `docker build` on the top-level Dockerfile pulls
+# a published ama-base automatically. See docs/CONFIG.md.
+
+
+###############################################################################
+# Stage 1 — pgsrip
+#
+# pgsrip is the PGS -> SRT driver used by internal/subtitle/ocr.go. It is a
+# Python tool; it lives in its own venv so it cannot collide with whipper's
+# system Python packages in the runtime image.
+###############################################################################
+FROM debian:trixie-slim AS pgsrip-builder
+
+ARG PGSRIP_VERSION=0.1.12
+
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        python3 \
+        python3-venv; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    python3 -m venv /opt/pgsrip; \
+    /opt/pgsrip/bin/pip install --no-cache-dir --upgrade pip; \
+    /opt/pgsrip/bin/pip install --no-cache-dir "pgsrip==${PGSRIP_VERSION}"; \
+    /opt/pgsrip/bin/pgsrip --help >/dev/null
+
+
+###############################################################################
+# Stage 2 — ama binary
+#
+# Static (CGO_ENABLED=0) so the runtime stage only has to carry the binary.
+###############################################################################
+FROM golang:1.27-trixie AS go-builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/ama ./cmd/ama
+
+
+###############################################################################
+# Stage 3 — runtime (this is what gets tagged ama-base)
+###############################################################################
+FROM debian:trixie-slim AS ama-base
+
+# Tesseract language data bundled into the image. Per the resolution on #18 the
+# set is fixed at build time and AMA fails fast if subtitle.ocr_languages names
+# a language that is not present — nothing is installed at runtime.
+#
+# Default set (~35 MB): eng is mandatory; osd is tesseract's orientation/script
+# detector; fra/spa ship on nearly every Region A retail Blu-ray; deu/ita cover
+# the common Region B pressings; jpn covers anime releases. To bundle more,
+# rebuild with e.g.
+#   --build-arg TESSERACT_LANGS="eng osd fra deu spa ita jpn nld por swe"
+# Package names are the Debian tesseract-ocr-<code> packages.
+ARG TESSERACT_LANGS="eng osd fra deu spa ita jpn"
+
+# whipper, pinned to an EXACT Debian package version rather than a bare
+# `apt-get install whipper`. Two reasons:
+#   1. Reproducibility — a bare install floats to whatever trixie's archive
+#      currently carries, which can drift between builds.
+#   2. #9 (internal/cd/whipper.go)'s output-parsing tests and fixtures under
+#      internal/testutil/testdata/examples/whipper/ are explicitly "shaped
+#      after whipper 0.10.0 `whipper cd info` output" — the Go code assumes
+#      that CLI's output shape, so the image should ship exactly that.
+# Debian trixie's archive carries whipper 0.10.0-5 (verified via
+# sources.debian.org), which is both the current stable-release package and
+# matches the 0.10.0 upstream version the fixtures were modeled on, so an
+# apt version pin is sufficient here — no need for a separate from-source
+# stage fetching an upstream GitHub release. If trixie's archive ever moves
+# whipper to a new upstream version (a stable-release archive does not do
+# this outside point releases, but pinning makes it a build failure instead
+# of a silent drift either way), bump this ARG deliberately and re-verify
+# against #9's fixtures.
+ARG WHIPPER_VERSION=0.10.0-5
+
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        eject \
+        ffmpeg \
+        gosu \
+        mkvtoolnix \
+        "whipper=${WHIPPER_VERSION}" \
+        tesseract-ocr \
+        $(for lang in $TESSERACT_LANGS; do echo "tesseract-ocr-$lang"; done) \
+        python3 \
+        libgl1 \
+        libglib2.0-0t64; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=pgsrip-builder /opt/pgsrip /opt/pgsrip
+RUN ln -s /opt/pgsrip/bin/pgsrip /usr/local/bin/pgsrip
+
+COPY --from=go-builder /out/ama /usr/local/bin/ama
+
+# The container is started with `devices: - /dev/sr0:/dev/sr0`, and the device
+# node keeps the host's owning GID. `ama` joins the stable Debian/Ubuntu
+# `cdrom` GID (24) below. Every other distro (Arch's `optical`, Fedora's
+# `cdrom`, ...) allocates that GID dynamically per install, so no value baked
+# in at build time can be relied on — pass it at container-run-time instead
+# via `group_add:` in compose (see docs/CONFIG.md):
+#   group_add: ["<gid from `stat -c %g /dev/sr0` on the host>"]
+#
+# uid/gid 1000 are only the default. The container starts as root and
+# docker-entrypoint.sh remaps `ama` to PUID/PGID (env, default 1000:1000)
+# before dropping privileges — no build-time uid/gid can match every host
+# (a root-owned NAS mount, a second local account, ...) any more than the
+# cdrom GID above can, so it is a run-time remap for the same reason.
+RUN set -eux; \
+    groupadd -g 1000 ama; \
+    useradd -u 1000 -g ama -G cdrom,video -m -d /home/ama -s /usr/sbin/nologin ama; \
+    mkdir -p /config /media/library /tmp/ama; \
+    chown -R ama:ama /config /media/library /tmp/ama
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENV AMA_CONFIG=/config/ama.yaml \
+    HOME=/home/ama \
+    LANG=C.UTF-8 \
+    TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
+
+# /config      — ama.yaml (bind mount)
+# /media/library — movie + music output roots (bind mount)
+WORKDIR /home/ama
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${AMA_WEB_PORT:-8080}/" >/dev/null || exit 1
+
+# Root at start (see docker-entrypoint.sh); it drops to ama:ama via gosu
+# before exec'ing the daemon, so SIGTERM still reaches ama directly — gosu
+# and the entrypoint script's own `exec` each replace the process image
+# rather than forking, so ama ends up running as PID 1 in practice.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["/usr/local/bin/ama"]

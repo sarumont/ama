@@ -24,6 +24,7 @@ testdata
 
 # Container build files
 Dockerfile
+Dockerfile.base
 .dockerignore
 docker-compose.yml
 docker-compose.*.yml
