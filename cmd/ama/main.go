@@ -40,8 +40,8 @@ func run(args []string, stdout, stderr *os.File) error {
 		return err
 	}
 	if showVersion {
-		fmt.Fprintln(stdout, manifest.Version)
-		return nil
+		_, err := fmt.Fprintln(stdout, manifest.Version)
+		return err
 	}
 
 	cfg, err := config.Load(configPath)
