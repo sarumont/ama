@@ -1,5 +1,5 @@
 {
-  "id": "8f14e45f-ceea-467a-9b0a-1c0b9a1c9f21",
+  "id": "55555555-5555-5555-5555-555555555555",
   "ama_version": "0.1.0",
   "detected_at": "2026-08-19T18:00:00Z",
   "ripped_at": "2026-08-19T18:02:00Z",
@@ -21,7 +21,8 @@
     "confirmed": true,
     "confirmed_at": "2026-08-19T18:02:30Z",
     "candidates": [
-      { "mb_release_id": "b3f0a4a1-4d05-4f2e-9c39-1f0d4a2f8c11", "mb_release_group_id": "6a1e9c2d-0f77-4a1b-8ef3-2b7c5d9e0a44", "artist": "Jamestown Revival", "album": "The Education of a Wandering Man", "year": 2014, "score": 0.94 }
+      { "mb_release_id": "b3f0a4a1-4d05-4f2e-9c39-1f0d4a2f8c11", "mb_release_group_id": "6a1e9c2d-0f77-4a1b-8ef3-2b7c5d9e0a44", "artist": "Jamestown Revival", "album": "The Education of a Wandering Man", "year": 2014, "score": 0.94 },
+      { "mb_release_id": "9c1a2b3c-0000-4444-8888-abcdefabcdef", "mb_release_group_id": "0f1e2d3c-1111-5555-9999-fedcbafedcba", "artist": "Jamestown Revival", "album": "Utah", "year": 2016, "score": 0.21 }
     ]
   },
 
@@ -32,6 +33,13 @@
       "duration_seconds": 207,
       "accurate_rip": true,
       "output_file": "01 - Where I Need to Be.flac"
+    },
+    {
+      "number": 2,
+      "title": "California (Cast Iron Soul)",
+      "duration_seconds": 231,
+      "accurate_rip": false,
+      "output_file": "02 - California (Cast Iron Soul).flac"
     }
   ],
 
