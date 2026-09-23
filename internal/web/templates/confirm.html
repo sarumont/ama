@@ -1,0 +1,200 @@
+{{/*
+  confirm.html is the "/confirm/:id" view: the one hard gate in the
+  pipeline. It shows the disc as identified, lets the user pick (or search
+  for) the right candidate, and previews the manifest that will result.
+
+  Data: confirmViewData (handlers.go) — CurrentPath, Manifest (the full
+  *manifest.Manifest, for fields with no pointer types to worry about),
+  DiscLabel/Confidence/ConfirmedAt (Manifest fields that are pointers,
+  pre-resolved to display strings), and Tracks/Subtitles (manifest.Track /
+  manifest.Subtitle wrapped with their own pointer fields pre-resolved —
+  see trackRow/subtitleRow in handlers.go).
+
+  The candidate-select, role-override and forced-subtitle controls below
+  POST to /confirm/:id, /api/tracks/:id/:index/role and
+  /api/subtitles/:id/:stream_index/forced (#23). The candidate-select and
+  manual-search forms target the whole body (hx-target="body") — the
+  response is a full re-render of this page via the same handler/view
+  helpers GET uses, so htmx's fragment parser absorbs the html/head/body
+  wrapper and everything updates: identification, status, and the
+  tracks/subtitles tables. The per-row role-override and forced-subtitle
+  forms target their own row (hx-target="closest tr", hx-swap="outerHTML"
+  so a class change like row-flagged is picked up too) via the "track-row"
+  and "subtitle-row" named templates below, which the handlers also render
+  standalone for that swap.
+
+  Once a manifest's status is complete or error, #23 locks role-override
+  and forced-subtitle edits (rejected 409 server-side — no precedent in
+  this codebase for safely re-running the downstream remux/Radarr-scan
+  steps an edit after handoff would imply) and these controls render as
+  disabled text instead of a form; see trackRow/subtitleRow.Locked in
+  handlers.go.
+*/}}
+
+{{define "title"}}Confirm — {{.DiscLabel}}{{end}}
+
+{{define "content"}}
+<h1>Confirm Identification</h1>
+
+<section class="disc-info">
+  <h2>Disc</h2>
+  <dl>
+    <dt>Label</dt><dd>{{.DiscLabel}}</dd>
+    <dt>Device</dt><dd>{{.Manifest.Disc.Device}}</dd>
+    <dt>Type</dt><dd>{{.Manifest.Disc.Type}}</dd>
+    <dt>Status</dt><dd>{{template "status-badge" .Manifest.Status}}</dd>
+  </dl>
+  {{template "warnings" .Manifest}}
+</section>
+
+<section class="candidates">
+  <h2>Candidates</h2>
+  {{if .Manifest.Identification.Candidates}}
+  <ol class="candidate-list">
+    {{range $i, $c := .Manifest.Identification.Candidates}}
+    <li class="candidate{{if eq $i 0}} candidate-top{{end}}">
+      {{if eq $.Manifest.Disc.Type "bluray"}}
+        <strong>{{$c.Title}}</strong> ({{$c.Year}}) — score {{printf "%.2f" $c.Score}} — TMDB {{$c.TMDBID}}
+      {{else}}
+        <strong>{{$c.Artist}} — {{$c.Album}}</strong> ({{$c.Year}}) — score {{printf "%.2f" $c.Score}} — release {{$c.MBReleaseID}}
+      {{end}}
+      <form hx-post="/confirm/{{$.Manifest.ID}}" hx-target="body">
+        {{if eq $.Manifest.Disc.Type "bluray"}}
+          <input type="hidden" name="tmdb_id" value="{{$c.TMDBID}}">
+        {{else}}
+          <input type="hidden" name="mb_release_id" value="{{$c.MBReleaseID}}">
+        {{end}}
+        <button type="submit">Select</button>
+      </form>
+    </li>
+    {{end}}
+  </ol>
+  {{else}}
+  <p class="pending">No candidates yet.</p>
+  {{end}}
+
+  <form class="manual-search" hx-post="/confirm/{{.Manifest.ID}}" hx-target="body">
+    <label for="query">Not right? Search manually:</label>
+    <input type="text" id="query" name="query" placeholder="Title, or artist / album">
+    <button type="submit">Search</button>
+  </form>
+</section>
+
+<section class="manifest-preview">
+  <h2>Manifest Preview</h2>
+  <dl>
+    <dt>Method</dt><dd>{{.Manifest.Identification.Method}}</dd>
+    {{if eq .Manifest.Disc.Type "bluray"}}
+      <dt>Title</dt><dd>{{.Manifest.Identification.Title}}</dd>
+    {{else}}
+      <dt>Artist</dt><dd>{{.Manifest.Identification.Artist}}</dd>
+      <dt>Album</dt><dd>{{.Manifest.Identification.Album}}</dd>
+    {{end}}
+    <dt>Year</dt><dd>{{.Manifest.Identification.Year}}</dd>
+    {{if .Confidence}}<dt>Confidence</dt><dd>{{.Confidence}}</dd>{{end}}
+    <dt>Confirmed</dt><dd>{{if .Manifest.Identification.Confirmed}}Yes{{if .Manifest.Identification.ConfirmedBy}} ({{.Manifest.Identification.ConfirmedBy}}{{if .ConfirmedAt}}, {{.ConfirmedAt}}{{end}}){{end}}{{else}}No{{end}}</dd>
+    <dt>Output path</dt><dd>{{.Manifest.Output.Path}}</dd>
+    {{if .Manifest.Output.MainFeature}}<dt>Main feature</dt><dd>{{.Manifest.Output.MainFeature}}</dd>{{end}}
+    {{if .Manifest.Output.ProcessedFeature}}<dt>Processed feature</dt><dd>{{.Manifest.Output.ProcessedFeature}}</dd>{{end}}
+  </dl>
+</section>
+
+<section class="tracks">
+  <h2>Tracks</h2>
+  {{if .Tracks}}
+  <table>
+    {{if eq .Manifest.Disc.Type "bluray"}}
+    <thead><tr><th>Index</th><th>Duration</th><th>Size</th><th>Role</th><th>Reason</th><th>Output</th><th>Override role</th></tr></thead>
+    <tbody>
+      {{range .Tracks}}{{template "track-row" .}}{{end}}
+    </tbody>
+    {{else}}
+    <thead><tr><th>#</th><th>Title</th><th>Duration</th><th>AccurateRip</th><th>Output</th></tr></thead>
+    <tbody>
+      {{range .Tracks}}
+      <tr>
+        <td>{{.Number}}</td>
+        <td>{{.Title}}</td>
+        <td>{{.DurationDisplay}}</td>
+        <td>{{.AccurateRipDisplay}}</td>
+        <td>{{.OutputFile}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+    {{end}}
+  </table>
+  {{else}}
+  <p class="pending">Ripping hasn't run yet — tracks will appear here.</p>
+  {{end}}
+</section>
+
+{{if eq .Manifest.Disc.Type "bluray"}}
+<section class="subtitles">
+  <h2>Subtitles</h2>
+  {{if .Subtitles}}
+  <table>
+    <thead><tr><th>Stream</th><th>Codec</th><th>Lang</th><th>Size</th><th>Forced</th><th>Reason</th><th>Set forced</th></tr></thead>
+    <tbody>
+      {{range .Subtitles}}{{template "subtitle-row" .}}{{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="pending">Subtitle analysis hasn't run yet.</p>
+  {{end}}
+</section>
+{{end}}
+{{end}}
+
+{{/*
+  track-row/subtitle-row are one <tr> each, self-contained (ManifestID and
+  Locked travel on the row itself — see trackRow/subtitleRow in
+  handlers.go) so a handler can render exactly one of them as the
+  hx-swap="outerHTML" response for its own POST, as well as being used
+  inline by the range loops above.
+*/}}
+{{define "track-row"}}
+<tr{{if .Flagged}} class="row-flagged"{{end}}>
+  <td>{{.IndexDisplay}}</td>
+  <td>{{.DurationDisplay}}</td>
+  <td>{{.SizeDisplay}}</td>
+  <td>{{.Role}}{{if .Flagged}} <span class="flag">Needs review — alternate cut</span>{{end}}</td>
+  <td>{{.RoleReason}}</td>
+  <td>{{.OutputFile}}</td>
+  <td>
+    {{if .Locked}}
+    <span class="locked">Locked — rip complete</span>
+    {{else}}
+    <form hx-post="/api/tracks/{{.ManifestID}}/{{.IndexDisplay}}/role" hx-target="closest tr" hx-swap="outerHTML">
+      <select name="role">
+        <option value="feature"{{if eq .Role "feature"}} selected{{end}}>feature</option>
+        <option value="alternate_cut"{{if eq .Role "alternate_cut"}} selected{{end}}>alternate_cut</option>
+        <option value="commentary"{{if eq .Role "commentary"}} selected{{end}}>commentary</option>
+        <option value="extra"{{if eq .Role "extra"}} selected{{end}}>extra</option>
+      </select>
+      <button type="submit">Update</button>
+    </form>
+    {{end}}
+  </td>
+</tr>
+{{end}}
+
+{{define "subtitle-row"}}
+<tr>
+  <td>{{.StreamIndex}}</td>
+  <td>{{.Codec}}</td>
+  <td>{{.Language}}</td>
+  <td>{{.SizeDisplay}}</td>
+  <td>{{if .ForcedCandidate}}Yes{{else}}No{{end}}</td>
+  <td>{{.ForcedReasonDisplay}}</td>
+  <td>
+    {{if .Locked}}
+    <span class="locked">Locked — rip complete</span>
+    {{else}}
+    <form hx-post="/api/subtitles/{{.ManifestID}}/{{.StreamIndex}}/forced" hx-target="closest tr" hx-swap="outerHTML">
+      <input type="hidden" name="forced" value="{{if .ForcedCandidate}}false{{else}}true{{end}}">
+      <button type="submit">{{if .ForcedCandidate}}Clear{{else}}Set{{end}} forced</button>
+    </form>
+    {{end}}
+  </td>
+</tr>
+{{end}}

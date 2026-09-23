@@ -1,0 +1,30 @@
+{
+  "id": "77777777-7777-7777-7777-777777777777",
+  "ama_version": "0.1.0",
+  "detected_at": "2026-09-21T12:00:00Z",
+  "ripped_at": "0001-01-01T00:00:00Z",
+  "status": "pending_confirmation",
+
+  "disc": {
+    "type": "cd",
+    "label": null,
+    "device": "/dev/sr0"
+  },
+
+  "identification": {
+    "method": "musicbrainz",
+    "confirmed": false,
+    "candidates": [
+      { "mb_release_id": "aaaa1111-1111-1111-1111-111111111111", "mb_release_group_id": "bbbb2222-2222-2222-2222-222222222222", "artist": "Pending Artist", "album": "Pending Album", "year": 2020, "score": 0.8 }
+    ]
+  },
+
+  "tracks": [],
+
+  "output": {
+    "path": "/media/library/music/Pending Artist/Pending CD (2026)/"
+  },
+
+  "warnings": [],
+  "errors": []
+}

@@ -1,0 +1,36 @@
+{
+  "id": "33333333-3333-3333-3333-333333333333",
+  "ama_version": "0.1.0",
+  "detected_at": "2026-09-22T10:00:00Z",
+  "ripped_at": "2026-09-22T10:01:00Z",
+  "status": "ripping",
+
+  "disc": {
+    "type": "bluray",
+    "label": "RIPPING_NOW",
+    "device": "/dev/sr0"
+  },
+
+  "identification": {
+    "method": "bdmv+tmdb",
+    "tmdb_id": 12345,
+    "title": "Ripping Now",
+    "year": 2026,
+    "confidence": 0.91,
+    "confirmed": true,
+    "confirmed_at": "2026-09-22T10:00:30Z",
+    "confirmed_by": "user",
+    "candidates": [
+      { "tmdb_id": 12345, "title": "Ripping Now", "year": 2026, "score": 0.91 }
+    ]
+  },
+
+  "tracks": [],
+
+  "output": {
+    "path": "/media/library/movies/Ripping Now (2026)/"
+  },
+
+  "warnings": [],
+  "errors": []
+}

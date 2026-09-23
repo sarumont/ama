@@ -1,0 +1,49 @@
+{
+  "id": "66666666-6666-6666-6666-666666666666",
+  "ama_version": "0.1.0",
+  "detected_at": "2026-07-01T09:00:00Z",
+  "ripped_at": "2026-07-01T09:30:00Z",
+  "status": "complete",
+
+  "disc": {
+    "type": "bluray",
+    "label": "WARNED_MOVIE",
+    "device": "/dev/sr0"
+  },
+
+  "identification": {
+    "method": "bdmv+tmdb",
+    "tmdb_id": 42,
+    "title": "Warned Movie",
+    "year": 2019,
+    "confidence": 0.55,
+    "confirmed": true,
+    "confirmed_at": "2026-07-01T09:05:00Z",
+    "confirmed_by": "user",
+    "candidates": [
+      { "tmdb_id": 42, "title": "Warned Movie", "year": 2019, "score": 0.55 }
+    ]
+  },
+
+  "tracks": [
+    {
+      "makemkv_index": 0,
+      "duration_seconds": 6000,
+      "size_bytes": 20000000000,
+      "audio_track_count": 1,
+      "chapter_count": 12,
+      "role": "feature",
+      "role_reason": "longest track",
+      "output_file": "Warned Movie (2019).mkv",
+      "edition": null
+    }
+  ],
+
+  "output": {
+    "path": "/media/library/movies/Warned Movie (2019)/",
+    "main_feature": "Warned Movie (2019).mkv"
+  },
+
+  "warnings": ["low identification confidence (0.55), auto-confirmed by threshold"],
+  "errors": []
+}
