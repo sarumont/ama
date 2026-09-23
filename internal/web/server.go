@@ -141,6 +141,13 @@ func (s *Server) routes() *http.ServeMux {
 	// HTMX polls this for progress updates.
 	mux.HandleFunc("GET /api/status/{id}", s.handleStatus)
 
+	// User actions (#23) — the only writes docs/CLAUDE.md's "Web UI is
+	// read-mostly" allows: confirm disc ID, override a track's role, set a
+	// forced subtitle track.
+	mux.HandleFunc("POST /confirm/{id}", s.handleConfirmSubmit)
+	mux.HandleFunc("POST /api/tracks/{id}/{index}/role", s.handleTrackRole)
+	mux.HandleFunc("POST /api/subtitles/{id}/{stream_index}/forced", s.handleSubtitleForced)
+
 	// Vendored assets, served locally so the box can be offline.
 	mux.Handle("GET /static/", staticHandler())
 

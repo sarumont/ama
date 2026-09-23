@@ -1,0 +1,92 @@
+{
+  "id": "88888888-8888-8888-8888-888888888888",
+  "ama_version": "0.1.0",
+  "detected_at": "2026-09-20T10:00:00Z",
+  "ripped_at": "2026-09-20T10:05:00Z",
+  "status": "analyzing",
+
+  "disc": {
+    "type": "bluray",
+    "label": "IN_PROGRESS",
+    "device": "/dev/sr0"
+  },
+
+  "identification": {
+    "method": "bdmv+tmdb",
+    "tmdb_id": 777,
+    "title": "In Progress",
+    "year": 2026,
+    "confidence": 0.88,
+    "confirmed": true,
+    "confirmed_at": "2026-09-20T10:00:30Z",
+    "confirmed_by": "user",
+    "candidates": [
+      { "tmdb_id": 777, "title": "In Progress", "year": 2026, "score": 0.88 }
+    ]
+  },
+
+  "tracks": [
+    {
+      "makemkv_index": 0,
+      "duration_seconds": 6500,
+      "size_bytes": 25000000000,
+      "audio_track_count": 2,
+      "chapter_count": 20,
+      "role": "feature",
+      "role_reason": "longest track",
+      "output_file": "In Progress (2026).mkv",
+      "edition": null
+    },
+    {
+      "makemkv_index": 1,
+      "duration_seconds": 6200,
+      "size_bytes": 24000000000,
+      "audio_track_count": 2,
+      "chapter_count": 19,
+      "role": "alternate_cut",
+      "role_reason": "within 10% of feature duration",
+      "output_file": "extras/In Progress (2026)_t01.mkv",
+      "edition": null
+    }
+  ],
+
+  "subtitles": [
+    {
+      "stream_index": 7,
+      "codec": "hdmv_pgs_subtitle",
+      "language": "eng",
+      "size_bytes": 2100000,
+      "forced_flag_in_source": false,
+      "default_flag_in_source": false,
+      "hearing_impaired": false,
+      "forced_candidate": true,
+      "forced_candidate_reason": "size ratio 0.06 vs stream 12 (2100000 vs 33000000 bytes)",
+      "paired_with_stream_index": 12,
+      "needs_ocr": true,
+      "converted": true,
+      "conversion_error": null
+    },
+    {
+      "stream_index": 12,
+      "codec": "hdmv_pgs_subtitle",
+      "language": "eng",
+      "size_bytes": 33000000,
+      "forced_flag_in_source": false,
+      "default_flag_in_source": false,
+      "hearing_impaired": false,
+      "forced_candidate": false,
+      "forced_candidate_reason": null,
+      "paired_with_stream_index": 7,
+      "needs_ocr": true,
+      "converted": true,
+      "conversion_error": null
+    }
+  ],
+
+  "output": {
+    "path": "/media/library/movies/In Progress (2026)/"
+  },
+
+  "warnings": [],
+  "errors": []
+}
