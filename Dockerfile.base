@@ -91,12 +91,18 @@ ARG TESSERACT_LANGS="eng osd fra deu spa ita jpn"
 # sources.debian.org), which is both the current stable-release package and
 # matches the 0.10.0 upstream version the fixtures were modeled on, so an
 # apt version pin is sufficient here — no need for a separate from-source
-# stage fetching an upstream GitHub release. If trixie's archive ever moves
-# whipper to a new upstream version (a stable-release archive does not do
-# this outside point releases, but pinning makes it a build failure instead
-# of a silent drift either way), bump this ARG deliberately and re-verify
-# against #9's fixtures.
-ARG WHIPPER_VERSION=0.10.0-5
+# stage fetching an upstream GitHub release. The pin must be the exact
+# installable BINARY package version, not just the source version: Debian's
+# buildd can rebuild a package (a "binNMU", e.g. an ABI bump in a library it
+# links against) without touching the source version, appending +bN to the
+# binary version apt actually serves — trixie's archive currently serves
+# whipper as 0.10.0-5+b3, and "whipper=0.10.0-5" (no suffix) is simply not an
+# installable candidate, which fails the build rather than silently
+# installing something else. If this drifts again (another binNMU, or a real
+# point-release bump), find the current binary version with:
+#   curl -s https://packages.debian.org/trixie/amd64/whipper/download | grep -o 'whipper_[^ ]*_amd64\.deb'
+# and re-verify against #9's fixtures before bumping this ARG.
+ARG WHIPPER_VERSION=0.10.0-5+b3
 
 RUN set -eux; \
     apt-get update; \
