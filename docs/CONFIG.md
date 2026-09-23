@@ -168,7 +168,7 @@ docker build --build-arg MAKEMKV_ACCEPT_EULA=yes -t ama:latest .
 |---|---|---|
 | `TESSERACT_LANGS` | `eng osd fra deu spa ita jpn` | Tesseract language packs bundled into the image |
 | `PGSRIP_VERSION` | `0.1.12` | pgsrip release used for PGS → SRT |
-| `WHIPPER_VERSION` | `0.10.0-5` | Exact Debian package version of whipper. Pinned rather than a bare `apt-get install whipper` for reproducibility and to match the whipper 0.10.0 output shape `internal/testutil/testdata/examples/whipper/` fixtures assume (#9) |
+| `WHIPPER_VERSION` | `0.10.0-5+b3` | Exact installable Debian *binary* package version of whipper (not just the source version — a binNMU rebuild can append `+bN`). Pinned rather than a bare `apt-get install whipper` for reproducibility and to match the whipper 0.10.0 output shape `internal/testutil/testdata/examples/whipper/` fixtures assume (#9) |
 
 `subtitle.ocr_languages` may only name languages present in `TESSERACT_LANGS` —
 the set is fixed at build time and AMA fails fast at startup on an unknown
