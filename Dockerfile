@@ -1,20 +1,35 @@
 # syntax=docker/dockerfile:1
 
-# AMA — Automated Media Archiver
+# AMA — Automated Media Archiver — local image (adds MakeMKV)
 #
-# Single container, single daemon process. This image bundles every external
-# tool the pipeline shells out to: makemkvcon, whipper, ffmpeg/ffprobe,
-# mkvmerge/mkvpropedit, tesseract and pgsrip.
+# This image bundles every external tool the pipeline shells out to:
+# makemkvcon, whipper, ffmpeg/ffprobe, mkvmerge/mkvpropedit, tesseract and
+# pgsrip. Everything except MakeMKV lives in the publishable `ama-base`
+# image (Dockerfile.base, published to ghcr.io/sarumont/ama-base by
+# .github/workflows/docker.yml) — this file only adds MakeMKV on top of it.
 #
-# IMPORTANT — this image cannot be published to a public registry.
-# MakeMKV's binary package (makemkv-bin) is not freely redistributable, so
-# MakeMKV is downloaded and built *at image build time* and every user builds
-# their own image locally. Building requires accepting the MakeMKV EULA:
+# IMPORTANT — the *image this file produces* cannot be published to a public
+# registry. MakeMKV's binary package (makemkv-bin) is not freely
+# redistributable, so MakeMKV is downloaded and built *at image build time*
+# and every user builds their own final image locally. Building requires
+# accepting the MakeMKV EULA:
 #
 #     docker build --build-arg MAKEMKV_ACCEPT_EULA=yes -t ama:latest .
 #
+# By default this pulls `ghcr.io/sarumont/ama-base:latest` for the FROM in
+# stage 2 below. To build fully offline / from scratch instead — e.g. if you
+# don't want to trust the published base — build ama-base yourself first and
+# point at it locally:
+#
+#     docker build -f Dockerfile.base -t ama-base:local .
+#     docker build --build-arg MAKEMKV_ACCEPT_EULA=yes \
+#                  --build-arg AMA_BASE_IMAGE=ama-base:local \
+#                  -t ama:latest .
+#
 # The MakeMKV license key is NEVER baked into the image; it is supplied at
 # runtime via AMA_MAKEMKV_KEY (see docs/CONFIG.md).
+
+ARG AMA_BASE_IMAGE=ghcr.io/sarumont/ama-base:latest
 
 
 ###############################################################################
@@ -23,7 +38,7 @@
 # makemkv-oss (GPL, source) + makemkv-bin (proprietary, redistribution-
 # restricted) are downloaded from makemkv.com, verified against the GPG-signed
 # sha256sums file published alongside them, and compiled here. Everything is
-# staged into /out via DESTDIR so the runtime image gets the artifacts without
+# staged into /out via DESTDIR so the final image gets the artifacts without
 # any of the build toolchain.
 #
 # Approach follows automatic-ripping-machine's install_makemkv.sh, which in
@@ -112,134 +127,35 @@ RUN set -eux; \
 
 
 ###############################################################################
-# Stage 2 — pgsrip
-#
-# pgsrip is the PGS -> SRT driver used by internal/subtitle/ocr.go. It is a
-# Python tool; it lives in its own venv so it cannot collide with whipper's
-# system Python packages in the runtime image.
+# Stage 2 — final image: ama-base + MakeMKV
 ###############################################################################
-FROM debian:trixie-slim AS pgsrip-builder
+FROM ${AMA_BASE_IMAGE} AS runtime
 
-ARG PGSRIP_VERSION=0.1.12
+# ama-base does not set USER (the container starts as root; see
+# docker-entrypoint.sh), so no USER switch is needed here either — apt-get
+# below and the entrypoint's own PUID/PGID remap both require root.
 
+# MakeMKV-specific runtime dependencies. Everything else the final image
+# needs (whipper, ffmpeg, mkvtoolnix, tesseract, pgsrip, the ama binary, the
+# ama user, docker-entrypoint.sh, ENV/HEALTHCHECK/ENTRYPOINT) already comes
+# from ama-base. These three are here, not in ama-base, because nothing but
+# MakeMKV (built from source, outside apt) needs them — apt already pulls in
+# whatever whipper/ffmpeg/mkvtoolnix/tesseract need on their own:
+#   - libexpat1, libssl3t64, zlib1g: makemkvcon links against these (its
+#     builder stage installs the matching -dev/headers packages).
+#   - default-jre-headless: MakeMKV's BD-J support (blues.jar, installed by
+#     makemkv-bin) needs a JRE. It's the single largest package pulled in by
+#     this whole image; drop it here if BD-J discs turn out not to matter.
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates \
-        python3 \
-        python3-venv; \
-    rm -rf /var/lib/apt/lists/*
-
-RUN set -eux; \
-    python3 -m venv /opt/pgsrip; \
-    /opt/pgsrip/bin/pip install --no-cache-dir --upgrade pip; \
-    /opt/pgsrip/bin/pip install --no-cache-dir "pgsrip==${PGSRIP_VERSION}"; \
-    /opt/pgsrip/bin/pgsrip --help >/dev/null
-
-
-###############################################################################
-# Stage 3 — ama binary
-#
-# Static (CGO_ENABLED=0) so the runtime stage only has to carry the binary.
-###############################################################################
-FROM golang:1.27-trixie AS go-builder
-
-WORKDIR /src
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/ama ./cmd/ama
-
-
-###############################################################################
-# Stage 4 — runtime
-###############################################################################
-FROM debian:trixie-slim AS runtime
-
-# Tesseract language data bundled into the image. Per the resolution on #18 the
-# set is fixed at build time and AMA fails fast if subtitle.ocr_languages names
-# a language that is not present — nothing is installed at runtime.
-#
-# Default set (~35 MB): eng is mandatory; osd is tesseract's orientation/script
-# detector; fra/spa ship on nearly every Region A retail Blu-ray; deu/ita cover
-# the common Region B pressings; jpn covers anime releases. To bundle more,
-# rebuild with e.g.
-#   --build-arg TESSERACT_LANGS="eng osd fra deu spa ita jpn nld por swe"
-# Package names are the Debian tesseract-ocr-<code> packages.
-ARG TESSERACT_LANGS="eng osd fra deu spa ita jpn"
-
-RUN set -eux; \
-    apt-get update; \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        eject \
-        ffmpeg \
-        gosu \
-        mkvtoolnix \
-        whipper \
-        tesseract-ocr \
-        $(for lang in $TESSERACT_LANGS; do echo "tesseract-ocr-$lang"; done) \
-        python3 \
         default-jre-headless \
         libexpat1 \
         libssl3t64 \
-        zlib1g \
-        libgl1 \
-        libglib2.0-0t64; \
+        zlib1g; \
     rm -rf /var/lib/apt/lists/*
 
 # makemkvcon, mmgplsrv, mmccextr, libmakemkv/libdriveio/libmmbd and the
 # MakeMKV appdata, built in stage 1.
 COPY --from=makemkv-builder /out/usr/local/ /usr/local/
 RUN ldconfig
-
-COPY --from=pgsrip-builder /opt/pgsrip /opt/pgsrip
-RUN ln -s /opt/pgsrip/bin/pgsrip /usr/local/bin/pgsrip
-
-COPY --from=go-builder /out/ama /usr/local/bin/ama
-
-# The container is started with `devices: - /dev/sr0:/dev/sr0`, and the device
-# node keeps the host's owning GID. `ama` joins the stable Debian/Ubuntu
-# `cdrom` GID (24) below. Every other distro (Arch's `optical`, Fedora's
-# `cdrom`, ...) allocates that GID dynamically per install, so no value baked
-# in at build time can be relied on — pass it at container-run-time instead
-# via `group_add:` in compose (see docs/CONFIG.md):
-#   group_add: ["<gid from `stat -c %g /dev/sr0` on the host>"]
-#
-# uid/gid 1000 are only the default. The container starts as root and
-# docker-entrypoint.sh remaps `ama` to PUID/PGID (env, default 1000:1000)
-# before dropping privileges — no build-time uid/gid can match every host
-# (a root-owned NAS mount, a second local account, ...) any more than the
-# cdrom GID above can, so it is a run-time remap for the same reason.
-RUN set -eux; \
-    groupadd -g 1000 ama; \
-    useradd -u 1000 -g ama -G cdrom,video -m -d /home/ama -s /usr/sbin/nologin ama; \
-    mkdir -p /config /media/library /tmp/ama; \
-    chown -R ama:ama /config /media/library /tmp/ama
-
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
-ENV AMA_CONFIG=/config/ama.yaml \
-    HOME=/home/ama \
-    LANG=C.UTF-8 \
-    TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
-
-# /config      — ama.yaml (bind mount)
-# /media/library — movie + music output roots (bind mount)
-WORKDIR /home/ama
-
-EXPOSE 8080
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${AMA_WEB_PORT:-8080}/" >/dev/null || exit 1
-
-# Root at start (see docker-entrypoint.sh); it drops to ama:ama via gosu
-# before exec'ing the daemon, so SIGTERM still reaches ama directly — gosu
-# and the entrypoint script's own `exec` each replace the process image
-# rather than forking, so ama ends up running as PID 1 in practice.
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["/usr/local/bin/ama"]
