@@ -1,0 +1,130 @@
+/* AMA web UI — hand-written, no framework, no build step. */
+
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #6b6b6b;
+  --border: #d8d8d8;
+  --accent: #2563eb;
+  --badge-fg: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --fg: #e8e8e8;
+    --muted: #9a9a9a;
+    --border: #33363b;
+    --accent: #5b8cff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+.site-header {
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 1rem;
+}
+
+.site-header nav {
+  display: flex;
+  gap: 1.25rem;
+}
+
+.site-header nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 600;
+  padding: 0.25rem 0;
+  border-bottom: 2px solid transparent;
+}
+
+.site-header nav a.active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+main {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+}
+
+ul.warnings,
+ul.errors {
+  padding-left: 1.25rem;
+  margin: 0.5rem 0;
+}
+
+li.warning {
+  color: #92400e;
+}
+
+li.error {
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  li.warning {
+    color: #fbbf24;
+  }
+
+  li.error {
+    color: #f87171;
+  }
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--badge-fg);
+}
+
+.badge-pending-confirmation {
+  background: #a855f7;
+}
+
+.badge-ripping {
+  background: #2563eb;
+}
+
+.badge-analyzing {
+  background: #0891b2;
+}
+
+.badge-pending-ocr {
+  background: #d97706;
+}
+
+.badge-complete {
+  background: #16a34a;
+}
+
+.badge-error {
+  background: #dc2626;
+}
+
+.badge-unknown {
+  background: #6b7280;
+}
