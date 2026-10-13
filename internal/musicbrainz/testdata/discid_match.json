@@ -1,0 +1,38 @@
+{
+  "releases": [
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "title": "The Education of a Wandering Man",
+      "date": "2014-06-10",
+      "release-group": { "id": "33333333-3333-3333-3333-333333333333" },
+      "artist-credit": [
+        { "name": "Jamestown Revival", "joinphrase": "" }
+      ],
+      "media": [
+        {
+          "tracks": [
+            { "number": "1", "title": "Where I Need to Be", "length": 207000 },
+            { "number": "2", "title": "California (Cast Iron Soul)", "length": 231000 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "44444444-4444-4444-4444-444444444444",
+      "title": "The Education of a Wandering Man (Deluxe)",
+      "date": "2015",
+      "release-group": { "id": "33333333-3333-3333-3333-333333333333" },
+      "artist-credit": [
+        { "name": "Jamestown Revival", "joinphrase": " & " },
+        { "name": "Friends", "joinphrase": "" }
+      ],
+      "media": [
+        {
+          "tracks": [
+            { "number": "1", "title": "Where I Need to Be", "length": 207000 }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+# Hand-constructed sample, shaped after whipper 0.10.0's rip log.
+# State 4: disc absent from the AccurateRip database entirely -- not a
+# failure, just unverifiable (issue #9 spike, section 4).
+Tracks:
+  1:
+    Filename: /music/Obscure Artist/Obscure Album/01 - Only Track.flac
+    Peak level: 0.955512
+    Extraction quality: 100.00 %
+    Test CRC: 5A5A5A5A
+    Copy CRC: 5A5A5A5A
+    AccurateRip v1:
+      Result: Track not present in AccurateRip database
+    AccurateRip v2:
+      Result: Track not present in AccurateRip database
+    Status: Copy OK
+Conclusive status report:
+  AccurateRip summary: None of the tracks are present in the AccurateRip database
+  Health status: No errors occurred
