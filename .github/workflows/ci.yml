@@ -16,7 +16,7 @@ env:
   # "Latest stable" per docs/CLAUDE.md. Floor on the minor line so patch
   # releases are picked up automatically; go.mod may declare an older minor.
   GO_VERSION: "1.27.x"
-  GOLANGCI_LINT_VERSION: "v2.13.2"
+  GOLANGCI_LINT_VERSION: "v2.14.0"
 
 jobs:
   ci:
