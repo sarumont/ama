@@ -23,6 +23,7 @@ package web
 // that. This is deliberately not built out further than today's need.
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -224,8 +225,11 @@ type confirmViewData struct {
 	DiscLabel   string
 	Confidence  string // formatted percentage, "" if Identification.Confidence is unset
 	ConfirmedAt string // formatted timestamp, "" if unset
-	Tracks      []trackRow
-	Subtitles   []subtitleRow
+	// Locked is true once the manifest is in a terminal state (complete or
+	// error) — see trackRow.Locked/subtitleRow.Locked for why.
+	Locked    bool
+	Tracks    []trackRow
+	Subtitles []subtitleRow
 }
 
 // trackRow is confirm.html's per-track view. manifest.Track carries pointer
@@ -241,6 +245,18 @@ type trackRow struct {
 	DurationDisplay    string // human-readable DurationSeconds
 	AccurateRipDisplay string // "Yes"/"No"/"—" (CD)
 	Flagged            bool   // Role == alternate_cut, needs user review
+	// ManifestID and Locked travel on the row itself (rather than being
+	// read from the page's outer scope in confirm.html) so the "track-row"
+	// named template renders identically whether it's part of the full
+	// page or rendered standalone as a handleTrackRole response — see
+	// confirm.html.
+	ManifestID string
+	// Locked is true once the manifest is complete or error: #23's chosen
+	// answer to "what happens to overrides after handoff to Radarr" is to
+	// make them read-only from then on (see handlers.go's handleTrackRole
+	// doc comment), and confirm.html renders the override form as disabled
+	// text instead when this is set.
+	Locked bool
 }
 
 // subtitleRow is confirm.html's per-subtitle view; see trackRow.
@@ -248,9 +264,11 @@ type subtitleRow struct {
 	manifest.Subtitle
 	SizeDisplay         string
 	ForcedReasonDisplay string
+	ManifestID          string
+	Locked              bool
 }
 
-func trackRows(tracks []manifest.Track) []trackRow {
+func trackRows(tracks []manifest.Track, manifestID string, locked bool) []trackRow {
 	rows := make([]trackRow, len(tracks))
 	for i, t := range tracks {
 		row := trackRow{
@@ -259,6 +277,8 @@ func trackRows(tracks []manifest.Track) []trackRow {
 			Flagged:         t.Role == manifest.RoleAlternateCut,
 			IndexDisplay:    "—",
 			SizeDisplay:     "—",
+			ManifestID:      manifestID,
+			Locked:          locked,
 		}
 		if t.MakeMKVIndex != nil {
 			row.IndexDisplay = strconv.Itoa(*t.MakeMKVIndex)
@@ -279,13 +299,15 @@ func trackRows(tracks []manifest.Track) []trackRow {
 	return rows
 }
 
-func subtitleRows(subs []manifest.Subtitle) []subtitleRow {
+func subtitleRows(subs []manifest.Subtitle, manifestID string, locked bool) []subtitleRow {
 	rows := make([]subtitleRow, len(subs))
 	for i, sub := range subs {
 		rows[i] = subtitleRow{
 			Subtitle:            sub,
 			SizeDisplay:         humanSize(sub.SizeBytes),
 			ForcedReasonDisplay: derefStringOr(sub.ForcedCandidateReason, ""),
+			ManifestID:          manifestID,
+			Locked:              locked,
 		}
 	}
 	return rows
@@ -309,17 +331,458 @@ func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.render(w, http.StatusOK, "confirm.html", s.buildConfirmViewData(r, entry))
+}
+
+// buildConfirmViewData builds "/confirm/:id"'s view model for entry. It is
+// shared by handleConfirm (GET) and handleConfirmSubmit (POST, #23), which
+// re-renders the same page as its HTMX response so the candidate-select and
+// manual-search forms' hx-target="body" swap picks up every field a confirm
+// can change, not just identification.
+func (s *Server) buildConfirmViewData(r *http.Request, entry manifestEntry) confirmViewData {
 	m := entry.Manifest
-	data := confirmViewData{
+	locked := isLocked(m)
+	return confirmViewData{
 		CurrentPath: r.URL.Path,
 		Manifest:    m,
 		DiscLabel:   derefStringOr(m.Disc.Label, "Unknown"),
 		Confidence:  formatConfidence(m.Identification.Confidence),
 		ConfirmedAt: formatTime(m.Identification.ConfirmedAt),
-		Tracks:      trackRows(m.Tracks),
-		Subtitles:   subtitleRows(m.Subtitles),
+		Locked:      locked,
+		Tracks:      trackRows(m.Tracks, m.ID, locked),
+		Subtitles:   subtitleRows(m.Subtitles, m.ID, locked),
 	}
-	s.render(w, http.StatusOK, "confirm.html", data)
+}
+
+// isLocked reports whether m is in a terminal state (complete or error) —
+// see handleTrackRole's doc comment for why #23 makes overrides read-only
+// from that point on.
+func isLocked(m *manifest.Manifest) bool {
+	return m.Status == manifest.StatusComplete || m.Status == manifest.StatusError
+}
+
+// --- User actions (#23) ----------------------------------------------------
+//
+// docs/CLAUDE.md's "Web UI is read-mostly" names exactly three user
+// actions, implemented by the three handlers below: confirm a disc's
+// identification, override a track's role, and manually set a forced
+// subtitle. All three write through manifest.Update (the atomic
+// read-modify-write in writer.go, one lock per manifest path) and only ever
+// set fields — never delete or clear one another step already populated —
+// per the manifest's append-only convention.
+//
+// # Locking after handoff
+//
+// The ticket flagged an open question: what happens when a user tries to
+// override a track's role or a subtitle's forced flag on a rip that is
+// already status complete (handed to Radarr) or error? Three options were on
+// the table: (a) lock all overrides from that point on — read-only; (b)
+// allow the manifest edit but leave the on-disk *.mkv/*.processed.mkv files
+// stale relative to it; (c) allow the edit and re-run the affected
+// downstream steps (re-mux, re-trigger the Radarr scan) — which has no
+// precedent anywhere in this codebase. This implements (a): isLocked's
+// callers reject with 409 rather than silently producing a manifest that
+// disagrees with what's on disk (b) or inventing an inverse/rerun pipeline
+// this project has never needed before (c). confirm.html renders the
+// override controls as disabled text once Locked is set. This is a default,
+// not a settled design decision — see the PR description.
+//
+// Confirming identification itself (handleConfirmSubmit) is not subject to
+// this lock: it can only ever apply once, since it is what moves a
+// manifest off pending_confirmation in the first place, so by the time a
+// manifest reaches complete/error it is already confirmed and
+// handleConfirmSubmit's own idempotency check (below) makes a repeat POST a
+// no-op regardless of status.
+
+// errTrackNotFound and errSubtitleNotFound are returned by the mutators
+// passed to manifest.Update in handleTrackRole/handleSubtitleForced to
+// distinguish "no such index" from a generic write failure, so the HTTP
+// handler can answer 404 instead of 500. errManifestLocked is the same for
+// the isLocked rejection (409) — see "Locking after handoff" above. All
+// three are checked with errors.Is because manifest.Update wraps whatever
+// its callback returns with fmt.Errorf("...: %w", err).
+var (
+	errTrackNotFound    = errors.New("no track with that index")
+	errSubtitleNotFound = errors.New("no subtitle stream with that index")
+	errManifestLocked   = errors.New("manifest is complete or errored; overrides are locked")
+)
+
+// validRoles is the set handleTrackRole accepts, per docs/MANIFEST.md's
+// "Role Values" and the AC — role_skip is a title-selection outcome (a
+// track never ripped at all), not something a user assigns after the fact,
+// so it is deliberately not in this set.
+var validRoles = map[string]bool{
+	string(manifest.RoleFeature):      true,
+	string(manifest.RoleAlternateCut): true,
+	string(manifest.RoleCommentary):   true,
+	string(manifest.RoleExtra):        true,
+}
+
+// roleReasonUserSet and the forcedReasonUser* constants are the
+// role_reason/forced_candidate_reason values handleTrackRole and
+// handleSubtitleForced record, marking the field as user-set rather than
+// produced by title selection's heuristics or the PGS size-ratio heuristic.
+const (
+	roleReasonUserSet   = "set by user"
+	forcedReasonUserSet = "set by user"
+	forcedReasonCleared = "cleared by user"
+	confirmedByUser     = "user"
+)
+
+// handleConfirmSubmit handles "POST /confirm/:id" — the one hard gate in
+// the pipeline. It accepts either a ranked candidate the user selected
+// (tmdb_id for a Blu-ray, mb_release_id for a CD — the hidden fields
+// confirm.html's candidate-select form posts) or a manually typed search
+// result (the "query" field confirm.html's manual-search form posts), and
+// on success writes identification.tmdb_id/mb_release_id, title (or
+// artist/album for a CD), year, confirmed: true, confirmed_at and
+// confirmed_by: "user" — unblocking the rip by moving status from
+// pending_confirmation to ripping.
+//
+// # The manual-search "query" field
+//
+// There is no TMDB/MusicBrainz search wired into this package (that would
+// be new scope — nothing here calls out to either API), so "query" is not
+// a live search: it is taken as the identification directly, exactly as
+// confirm.html's placeholder text ("Title, or artist / album") describes.
+// For a Blu-ray, the whole string becomes Identification.Title. For a CD,
+// splitArtistAlbumQuery splits it on "/" into artist and album, or — with
+// no "/" — treats the whole string as the album. No tmdb_id/mb_release_id
+// is set from a manual query, since none was looked up; only the candidate-
+// select path populates those. This is a judgment call flagged in the PR
+// description, not something docs/MANIFEST.md or the issue spells out.
+//
+// # Idempotency
+//
+// A manifest that is already confirmed makes this a no-op — the AC
+// requires this so a duplicate submit (e.g. a slow request retried by the
+// browser) can't restart or relabel an already-confirmed rip. The check is
+// repeated inside the manifest.Update callback (not just before it) so a
+// concurrent confirm can't race past it between the outer check and the
+// write.
+func (s *Server) handleConfirmSubmit(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	entries, err := s.loadManifests()
+	if err != nil {
+		s.log.Error("loading manifests", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	entry, ok := findManifest(entries, id)
+	if !ok {
+		http.Error(w, fmt.Sprintf("no manifest with id %q", id), http.StatusNotFound)
+		return
+	}
+	m := entry.Manifest
+
+	if m.Identification.Confirmed {
+		s.render(w, http.StatusOK, "confirm.html", s.buildConfirmViewData(r, entry))
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form body", http.StatusBadRequest)
+		return
+	}
+
+	var mutate func(*manifest.Manifest)
+	if m.Disc.Type == manifest.DiscTypeCD {
+		mutate, err = buildCDConfirmMutation(r, m)
+	} else {
+		mutate, err = buildBluRayConfirmMutation(r, m)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	err = manifest.Update(entry.Path, func(mm *manifest.Manifest) error {
+		if mm.Identification.Confirmed {
+			return nil // became confirmed concurrently; no-op
+		}
+		mutate(mm)
+		mm.Identification.Confirmed = true
+		now := time.Now().UTC()
+		mm.Identification.ConfirmedAt = &now
+		mm.Identification.ConfirmedBy = confirmedByUser
+		if mm.Status == manifest.StatusPendingConfirmation {
+			mm.Status = manifest.StatusRipping
+		}
+		return nil
+	})
+	if err != nil {
+		s.log.Error("updating manifest", "path", entry.Path, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	updated, err := manifest.Read(entry.Path)
+	if err != nil {
+		s.log.Error("reloading manifest", "path", entry.Path, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "confirm.html", s.buildConfirmViewData(r, manifestEntry{Manifest: updated, Path: entry.Path}))
+}
+
+// buildBluRayConfirmMutation validates a Blu-ray confirm POST's form values
+// against m's own candidate list and returns a mutator applying the result,
+// or an error describing what was wrong with the request (for a 400). It
+// does not itself touch m; the returned mutator is applied later, inside
+// manifest.Update, to the freshly-read manifest.
+func buildBluRayConfirmMutation(r *http.Request, m *manifest.Manifest) (func(*manifest.Manifest), error) {
+	if tmdbStr := strings.TrimSpace(r.FormValue("tmdb_id")); tmdbStr != "" {
+		tmdbID, err := strconv.Atoi(tmdbStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid tmdb_id %q", tmdbStr)
+		}
+		var chosen *manifest.Candidate
+		for i := range m.Identification.Candidates {
+			if m.Identification.Candidates[i].TMDBID == tmdbID {
+				chosen = &m.Identification.Candidates[i]
+				break
+			}
+		}
+		if chosen == nil {
+			return nil, fmt.Errorf("tmdb_id %d is not among this disc's candidates", tmdbID)
+		}
+		c := *chosen
+		return func(mm *manifest.Manifest) {
+			tmdbID := c.TMDBID
+			mm.Identification.TMDBID = &tmdbID
+			mm.Identification.Title = c.Title
+			mm.Identification.Year = c.Year
+		}, nil
+	}
+	if query := strings.TrimSpace(r.FormValue("query")); query != "" {
+		return func(mm *manifest.Manifest) {
+			mm.Identification.Title = query
+		}, nil
+	}
+	return nil, errors.New("must select a candidate or enter a search query")
+}
+
+// buildCDConfirmMutation is buildBluRayConfirmMutation for a CD manifest —
+// see its doc comment and handleConfirmSubmit's for the manual-query
+// behavior.
+func buildCDConfirmMutation(r *http.Request, m *manifest.Manifest) (func(*manifest.Manifest), error) {
+	if mbID := strings.TrimSpace(r.FormValue("mb_release_id")); mbID != "" {
+		var chosen *manifest.Candidate
+		for i := range m.Identification.Candidates {
+			if m.Identification.Candidates[i].MBReleaseID == mbID {
+				chosen = &m.Identification.Candidates[i]
+				break
+			}
+		}
+		if chosen == nil {
+			return nil, fmt.Errorf("mb_release_id %q is not among this disc's candidates", mbID)
+		}
+		c := *chosen
+		return func(mm *manifest.Manifest) {
+			mm.Identification.MBReleaseID = c.MBReleaseID
+			mm.Identification.MBReleaseGroupID = c.MBReleaseGroupID
+			mm.Identification.Artist = c.Artist
+			mm.Identification.Album = c.Album
+			mm.Identification.Year = c.Year
+		}, nil
+	}
+	if query := strings.TrimSpace(r.FormValue("query")); query != "" {
+		artist, album := splitArtistAlbumQuery(query)
+		return func(mm *manifest.Manifest) {
+			if artist != "" {
+				mm.Identification.Artist = artist
+			}
+			mm.Identification.Album = album
+		}, nil
+	}
+	return nil, errors.New("must select a candidate or enter a search query")
+}
+
+// splitArtistAlbumQuery splits a manual-search query on "/" into artist and
+// album, matching confirm.html's placeholder text ("Title, or artist /
+// album"). With no "/" the whole string is taken as the album alone —
+// there's no reliable way to guess artist vs. album from one bare string,
+// and album is what manifest.Dir/name key the CD's output path on.
+func splitArtistAlbumQuery(query string) (artist, album string) {
+	if i := strings.Index(query, "/"); i >= 0 {
+		return strings.TrimSpace(query[:i]), strings.TrimSpace(query[i+1:])
+	}
+	return "", query
+}
+
+// handleTrackRole handles "POST /api/tracks/:id/:index/role" —
+// confirm.html's per-track role-override form, which selects one of the
+// four Role values a user can assign (RoleSkip is excluded; see
+// validRoles) and posts it as the "role" field. :index is the track's
+// makemkv_index (confirm.html's IndexDisplay), not its position in the
+// Tracks slice. On success it writes Track.Role and marks Track.RoleReason
+// as user-set, then returns just that row's "track-row" fragment — the
+// hx-swap="outerHTML" response confirm.html's hx-target="closest tr" swaps
+// in — rather than the whole page the way handleConfirmSubmit does; a
+// role change only ever affects its own row.
+//
+// See "Locking after handoff" above for why this 409s once isLocked(m).
+func (s *Server) handleTrackRole(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	entries, err := s.loadManifests()
+	if err != nil {
+		s.log.Error("loading manifests", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	entry, ok := findManifest(entries, id)
+	if !ok {
+		http.Error(w, fmt.Sprintf("no manifest with id %q", id), http.StatusNotFound)
+		return
+	}
+	m := entry.Manifest
+
+	if m.Disc.Type != manifest.DiscTypeBluRay {
+		http.Error(w, "role override only applies to Blu-ray tracks", http.StatusBadRequest)
+		return
+	}
+
+	indexStr := r.PathValue("index")
+	index, err := strconv.Atoi(indexStr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid track index %q", indexStr), http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form body", http.StatusBadRequest)
+		return
+	}
+	role := r.FormValue("role")
+	if !validRoles[role] {
+		http.Error(w, fmt.Sprintf("invalid role %q: must be one of feature, alternate_cut, commentary, extra", role), http.StatusBadRequest)
+		return
+	}
+
+	var result trackRow
+	err = manifest.Update(entry.Path, func(mm *manifest.Manifest) error {
+		if isLocked(mm) {
+			return errManifestLocked
+		}
+		for i := range mm.Tracks {
+			if mm.Tracks[i].MakeMKVIndex != nil && *mm.Tracks[i].MakeMKVIndex == index {
+				mm.Tracks[i].Role = manifest.Role(role)
+				mm.Tracks[i].RoleReason = roleReasonUserSet
+				result = trackRows([]manifest.Track{mm.Tracks[i]}, mm.ID, false)[0]
+				return nil
+			}
+		}
+		return errTrackNotFound
+	})
+	switch {
+	case errors.Is(err, errManifestLocked):
+		http.Error(w, "cannot change role: this rip is already complete or errored", http.StatusConflict)
+		return
+	case errors.Is(err, errTrackNotFound):
+		http.Error(w, fmt.Sprintf("no track with index %d", index), http.StatusNotFound)
+		return
+	case err != nil:
+		s.log.Error("updating manifest", "path", entry.Path, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.pages["confirm.html"].ExecuteTemplate(w, "track-row", result); err != nil {
+		s.log.Error("rendering template", "template", "track-row", "err", err)
+	}
+}
+
+// handleSubtitleForced handles "POST /api/subtitles/:id/:stream_index/forced"
+// — confirm.html's per-subtitle forced-flag toggle, which posts "forced" as
+// the literal string "true" or "false" (confirm.html always sends the
+// opposite of the subtitle's current ForcedCandidate value, i.e. it's a
+// toggle button, not a form the user fills in). :stream_index is
+// Subtitle.StreamIndex. On success it sets ForcedCandidate and records a
+// user-set ForcedCandidateReason (a distinct reason for setting vs.
+// clearing, so it's clear from the manifest alone which happened), then
+// returns just that row's "subtitle-row" fragment — see handleTrackRole's
+// doc comment, which this mirrors.
+//
+// See "Locking after handoff" above for why this 409s once isLocked(m).
+func (s *Server) handleSubtitleForced(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	entries, err := s.loadManifests()
+	if err != nil {
+		s.log.Error("loading manifests", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	entry, ok := findManifest(entries, id)
+	if !ok {
+		http.Error(w, fmt.Sprintf("no manifest with id %q", id), http.StatusNotFound)
+		return
+	}
+	m := entry.Manifest
+
+	if m.Disc.Type != manifest.DiscTypeBluRay {
+		http.Error(w, "forced-subtitle override only applies to Blu-ray subtitles", http.StatusBadRequest)
+		return
+	}
+
+	streamIndexStr := r.PathValue("stream_index")
+	streamIndex, err := strconv.Atoi(streamIndexStr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid stream index %q", streamIndexStr), http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form body", http.StatusBadRequest)
+		return
+	}
+	var forced bool
+	switch r.FormValue("forced") {
+	case "true":
+		forced = true
+	case "false":
+		forced = false
+	default:
+		http.Error(w, fmt.Sprintf("invalid forced value %q: must be true or false", r.FormValue("forced")), http.StatusBadRequest)
+		return
+	}
+
+	var result subtitleRow
+	err = manifest.Update(entry.Path, func(mm *manifest.Manifest) error {
+		if isLocked(mm) {
+			return errManifestLocked
+		}
+		for i := range mm.Subtitles {
+			if mm.Subtitles[i].StreamIndex == streamIndex {
+				reason := forcedReasonCleared
+				if forced {
+					reason = forcedReasonUserSet
+				}
+				mm.Subtitles[i].ForcedCandidate = forced
+				mm.Subtitles[i].ForcedCandidateReason = &reason
+				result = subtitleRows([]manifest.Subtitle{mm.Subtitles[i]}, mm.ID, false)[0]
+				return nil
+			}
+		}
+		return errSubtitleNotFound
+	})
+	switch {
+	case errors.Is(err, errManifestLocked):
+		http.Error(w, "cannot change forced subtitle: this rip is already complete or errored", http.StatusConflict)
+		return
+	case errors.Is(err, errSubtitleNotFound):
+		http.Error(w, fmt.Sprintf("no subtitle stream with index %d", streamIndex), http.StatusNotFound)
+		return
+	case err != nil:
+		s.log.Error("updating manifest", "path", entry.Path, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.pages["confirm.html"].ExecuteTemplate(w, "subtitle-row", result); err != nil {
+		s.log.Error("rendering template", "template", "subtitle-row", "err", err)
+	}
 }
 
 // --- History ("/history") -------------------------------------------------
