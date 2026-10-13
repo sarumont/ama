@@ -1,0 +1,63 @@
+{{/*
+  layout.html is the shared base document for every AMA web view (queue,
+  confirm, history) and for the placeholder stand-in used by routes whose
+  real handler hasn't landed yet.
+
+  Contract for a page file (e.g. queue.html):
+    - Define {{define "title"}}...{{end}} and {{define "content"}}...{{end}}.
+      Both run with the same view-model dot that's passed to ExecuteTemplate.
+    - That view model must have a CurrentPath string field (set to
+      r.URL.Path) so the nav can mark the active link. See placeholder.html
+      for the minimal example.
+    - Render via s.render(w, status, "<page>.html", data) in server.go,
+      which executes the "layout" template against that page's own
+      *template.Template (see loadTemplates below) — NOT against the shared
+      templateFS parse tree.
+
+  Why per-page templates instead of one shared tree: html/template silently
+  lets a later {{define "content"}} overwrite an earlier one when multiple
+  files defining the same name are parsed into one *template.Template — so
+  if queue.html, confirm.html, and history.html were all parsed together via
+  a single template.ParseFS(templateFS, "templates/*.html") call, only the
+  last one parsed (alphabetically last) would ever render, for every route.
+  loadTemplates in server.go avoids this by parsing this file once as a
+  base, then cloning that base per page file and parsing only that one
+  page's define blocks into its clone. Keep using that pattern as pages are
+  added — don't collapse back to a single shared ParseFS call.
+
+  Shared partials defined below, callable from any page or partial:
+    - {{template "status-badge" .Status}} — .Status is one of the six
+      manifest status strings (docs/MANIFEST.md "Status Values"). An empty
+      or unrecognized value renders an "Unknown" badge instead of erroring,
+      so a zero-value view model is always safe.
+    - {{template "warnings" .}} — dot must expose .Warnings and .Errors,
+      each a []string (a manifest's warnings/errors arrays). Nil slices
+      (the zero value) render nothing for that section.
+*/}}
+
+{{define "layout"}}<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AMA — {{block "title" .}}{{end}}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/htmx.min.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <nav>
+        <a href="/"{{if eq .CurrentPath "/"}} class="active" aria-current="page"{{end}}>Queue</a>
+        <a href="/history"{{if eq .CurrentPath "/history"}} class="active" aria-current="page"{{end}}>History</a>
+      </nav>
+    </header>
+    <main>
+      {{block "content" .}}{{end}}
+    </main>
+  </body>
+</html>
+{{end}}
+
+{{define "status-badge"}}{{if eq . "pending_confirmation"}}<span class="badge badge-pending-confirmation">Pending Confirmation</span>{{else if eq . "ripping"}}<span class="badge badge-ripping">Ripping</span>{{else if eq . "analyzing"}}<span class="badge badge-analyzing">Analyzing</span>{{else if eq . "pending_ocr"}}<span class="badge badge-pending-ocr">Pending OCR</span>{{else if eq . "complete"}}<span class="badge badge-complete">Complete</span>{{else if eq . "error"}}<span class="badge badge-error">Error</span>{{else}}<span class="badge badge-unknown">Unknown</span>{{end}}{{end}}
+
+{{define "warnings"}}{{if .Warnings}}<ul class="warnings">{{range .Warnings}}<li class="warning">{{.}}</li>{{end}}</ul>{{end}}{{if .Errors}}<ul class="errors">{{range .Errors}}<li class="error">{{.}}</li>{{end}}</ul>{{end}}{{end}}
