@@ -5,6 +5,6 @@
 # text and does its own MusicBrainz lookup (see internal/cd's package doc).
 whipper
 cd
-info
 -d
 /dev/sr0
+info

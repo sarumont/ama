@@ -5,6 +5,6 @@
 # was printed to stdout before the non-zero exit.
 whipper
 cd
-info
 -d
 /dev/sr0
+info
