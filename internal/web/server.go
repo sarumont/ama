@@ -239,34 +239,21 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data any
 	_, _ = buf.WriteTo(w)
 }
 
-// placeholder renders the stand-in page for a view whose handler has not landed
-// yet. It exercises the full template pipeline so the plumbing is testable
-// ahead of the real handlers.
-func (s *Server) placeholder(w http.ResponseWriter, r *http.Request, title string) {
+// renderError renders a small full-page message through placeholder.html —
+// "Not Found" for an unknown manifest id, or a generic failure notice for an
+// internal error — so a handler failure or a bad :id in the URL produces a
+// normal styled page instead of a bare http.Error string or a panic.
+// handleQueue, handleConfirm and handleHistory (handlers.go) are its callers;
+// handleStatus does not use it, since /api/status/:id returns a bare HTML
+// fragment for hx-swap rather than a full page.
+func (s *Server) renderError(w http.ResponseWriter, r *http.Request, status int, title, message string) {
 	data := struct {
 		Title       string
 		Message     string
 		CurrentPath string
-	}{Title: title, Message: "Not yet implemented.", CurrentPath: r.URL.Path}
+	}{Title: title, Message: message, CurrentPath: r.URL.Path}
 
-	s.render(w, http.StatusNotImplemented, "placeholder.html", data)
-}
-
-func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
-	s.placeholder(w, r, "Queue")
-}
-
-func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
-	s.placeholder(w, r, "Confirm "+r.PathValue("id"))
-}
-
-func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	s.placeholder(w, r, "History")
-}
-
-// handleStatus returns an HTMX fragment, not a page, so it skips the template.
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not yet implemented", http.StatusNotImplemented)
+	s.render(w, status, "placeholder.html", data)
 }
 
 // statusRecorder captures the response status for request logging.

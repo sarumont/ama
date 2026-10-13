@@ -1,0 +1,49 @@
+{{/*
+  queue.html is the "/" view: the disc currently in the drive, if any.
+  "No background queue — one disc at a time; the drive is the queue"
+  (docs/CLAUDE.md), so there is at most one active manifest to show.
+
+  Data: queueViewData (handlers.go) — CurrentPath, and Current, which is nil
+  for the empty state (no disc in the drive / nothing active).
+
+  status-fragment is also executed directly by handleStatus for
+  GET /api/status/:id, outside of "layout" — see handlers.go — so it must
+  render standalone from a *statusView with no dependency on queueViewData.
+*/}}
+
+{{define "title"}}Queue{{end}}
+
+{{define "content"}}
+<h1>Queue</h1>
+{{if .Current}}
+  {{template "status-fragment" .Current}}
+{{else}}
+  <p class="empty-state">No disc in the drive. Insert a Blu-ray or CD to get started.</p>
+{{end}}
+{{end}}
+
+{{define "status-fragment"}}
+{{if .}}
+<div id="status-panel"{{if and (ne .Status "complete") (ne .Status "error")}} hx-get="/api/status/{{.ID}}" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
+  <dl class="disc-summary">
+    <dt>Label</dt><dd>{{.DiscLabel}}</dd>
+    <dt>Device</dt><dd>{{.Device}}</dd>
+    <dt>Type</dt><dd>{{.DiscType}}</dd>
+    {{if .Title}}<dt>Identified as</dt><dd>{{.Title}}{{if .Year}} ({{.Year}}){{end}}</dd>{{end}}
+    <dt>Status</dt><dd>{{template "status-badge" .Status}}</dd>
+  </dl>
+
+  {{if eq .Status "pending_confirmation"}}
+    <p><a class="button" href="/confirm/{{.ID}}">Confirm identification &rarr;</a></p>
+  {{else if eq .Status "ripping"}}
+    <p class="progress-note">Ripping in progress{{if .TrackCount}} — {{.TrackCount}} track(s) recorded so far{{end}}.</p>
+  {{else if eq .Status "analyzing"}}
+    <p class="progress-note">Analyzing subtitles.</p>
+  {{else if eq .Status "pending_ocr"}}
+    <p class="progress-note">Running subtitle OCR{{if .OCRTotal}} — {{.OCRDone}}/{{.OCRTotal}} streams converted{{end}}.</p>
+  {{end}}
+
+  {{template "warnings" .}}
+</div>
+{{end}}
+{{end}}

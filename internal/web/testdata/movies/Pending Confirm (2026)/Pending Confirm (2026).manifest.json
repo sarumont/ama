@@ -1,0 +1,33 @@
+{
+  "id": "44444444-4444-4444-4444-444444444444",
+  "ama_version": "0.1.0",
+  "detected_at": "2026-09-22T11:00:00Z",
+  "ripped_at": "0001-01-01T00:00:00Z",
+  "status": "pending_confirmation",
+
+  "disc": {
+    "type": "bluray",
+    "label": "PENDING_CONFIRM",
+    "device": "/dev/sr0"
+  },
+
+  "identification": {
+    "method": "bdmv+tmdb",
+    "title": "",
+    "year": 0,
+    "confirmed": false,
+    "candidates": [
+      { "tmdb_id": 555, "title": "Pending Confirm", "year": 2026, "score": 0.62 },
+      { "tmdb_id": 556, "title": "Pending Confirm Returns", "year": 2027, "score": 0.30 }
+    ]
+  },
+
+  "tracks": [],
+
+  "output": {
+    "path": "/media/library/movies/Pending Confirm (2026)/"
+  },
+
+  "warnings": [],
+  "errors": []
+}
