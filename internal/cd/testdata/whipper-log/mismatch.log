@@ -1,0 +1,24 @@
+# Hand-constructed sample, shaped after whipper 0.10.0's rip log.
+# State 3: disc IS in the AccurateRip database but no track's checksum
+# matched -- possibly a different pressing (issue #9 spike, section 4).
+Tracks:
+  1:
+    Filename: /music/Pressing Variant/Some Album/01 - Track One.flac
+    Peak level: 0.943211
+    Extraction quality: 100.00 %
+    Test CRC: 9F9F9F9F
+    Copy CRC: 9F9F9F9F
+    AccurateRip v1:
+      Result: No match
+      Confidence: 0
+      Local CRC: 12345678
+      Remote CRC: 87654321
+    AccurateRip v2:
+      Result: No match
+      Confidence: 0
+      Local CRC: ABCDEF01
+      Remote CRC: 10FEDCBA
+    Status: Copy OK
+Conclusive status report:
+  AccurateRip summary: No tracks could be verified as accurate (you may have a different pressing from the one(s) in the database)
+  Health status: No errors occurred

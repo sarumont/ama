@@ -178,7 +178,10 @@ the other is left in its zero state. CD rips omit both blocks entirely.
     "album": "The Education of a Wandering Man",
     "year": 2014,
     "confirmed": true,
-    "confirmed_at": "..."
+    "confirmed_at": "...",
+    "candidates": [
+      { "mb_release_id": "b3f0a4a1-4d05-4f2e-9c39-1f0d4a2f8c11", "mb_release_group_id": "6a1e9c2d-0f77-4a1b-8ef3-2b7c5d9e0a44", "artist": "Jamestown Revival", "album": "The Education of a Wandering Man", "year": 2014, "score": 0.94 }
+    ]
   },
 
   "tracks": [

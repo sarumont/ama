@@ -1,0 +1,30 @@
+{
+  "id": "22222222-2222-2222-2222-222222222222",
+  "ama_version": "0.1.0",
+  "detected_at": "2026-09-01T09:00:00Z",
+  "ripped_at": "0001-01-01T00:00:00Z",
+  "status": "error",
+
+  "disc": {
+    "type": "bluray",
+    "label": "BAD_DISC",
+    "device": "/dev/sr0"
+  },
+
+  "identification": {
+    "method": "bdmv+tmdb",
+    "title": "Bad Disc",
+    "year": 2020,
+    "confirmed": false,
+    "candidates": []
+  },
+
+  "tracks": [],
+
+  "output": {
+    "path": "/media/library/movies/Bad Disc (2020)/"
+  },
+
+  "warnings": ["disc label unreadable, fell back to directory scan"],
+  "errors": ["tmdb lookup failed: no matches above confidence threshold"]
+}

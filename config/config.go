@@ -78,6 +78,14 @@ type Arr struct {
 	Enabled bool   `yaml:"enabled"`
 	URL     string `yaml:"url"`
 	APIKey  string `yaml:"api_key"`
+	// QualityProfileID selects the quality profile AMA adds titles under.
+	// Required when Enabled: radarr.AddOptions/sonarr.AddOptions reject a
+	// zero value rather than guessing, since profile IDs are per-instance.
+	QualityProfileID int `yaml:"quality_profile_id"`
+	// LanguageProfileID selects the language profile. Only Sonarr (AddSeries)
+	// requires it; Radarr (AddMovie) ignores it, so it is not validated on
+	// the radarr section.
+	LanguageProfileID int `yaml:"language_profile_id"`
 }
 
 // Web configures the HTTP server.
@@ -211,8 +219,8 @@ func (c *Config) Validate() error {
 	if c.Output.Temp == "" {
 		fail("output.temp is required")
 	}
-	validateArr("radarr", c.Radarr, fail)
-	validateArr("sonarr", c.Sonarr, fail)
+	validateArr("radarr", c.Radarr, false, fail)
+	validateArr("sonarr", c.Sonarr, true, fail)
 	if c.Web.Port < 1 || c.Web.Port > 65535 {
 		fail("web.port must be between 1 and 65535, got %d", c.Web.Port)
 	}
@@ -232,7 +240,7 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-func validateArr(name string, arr Arr, fail func(string, ...any)) {
+func validateArr(name string, arr Arr, requireLanguageProfile bool, fail func(string, ...any)) {
 	if !arr.Enabled {
 		return
 	}
@@ -241,6 +249,12 @@ func validateArr(name string, arr Arr, fail func(string, ...any)) {
 	}
 	if arr.APIKey == "" {
 		fail("%s.api_key is required when %s.enabled is true", name, name)
+	}
+	if arr.QualityProfileID <= 0 {
+		fail("%s.quality_profile_id is required when %s.enabled is true", name, name)
+	}
+	if requireLanguageProfile && arr.LanguageProfileID <= 0 {
+		fail("%s.language_profile_id is required when %s.enabled is true", name, name)
 	}
 }
 
@@ -302,9 +316,18 @@ func envBindings() []envBinding {
 		{"RADARR", "ENABLED", func(c *Config, v string) error { return setBool(&c.Radarr.Enabled, v) }},
 		{"RADARR", "URL", func(c *Config, v string) error { c.Radarr.URL = v; return nil }},
 		{"RADARR", "API_KEY", func(c *Config, v string) error { c.Radarr.APIKey = v; return nil }},
+		{"RADARR", "QUALITY_PROFILE_ID", func(c *Config, v string) error {
+			return setInt(&c.Radarr.QualityProfileID, v)
+		}},
 		{"SONARR", "ENABLED", func(c *Config, v string) error { return setBool(&c.Sonarr.Enabled, v) }},
 		{"SONARR", "URL", func(c *Config, v string) error { c.Sonarr.URL = v; return nil }},
 		{"SONARR", "API_KEY", func(c *Config, v string) error { c.Sonarr.APIKey = v; return nil }},
+		{"SONARR", "QUALITY_PROFILE_ID", func(c *Config, v string) error {
+			return setInt(&c.Sonarr.QualityProfileID, v)
+		}},
+		{"SONARR", "LANGUAGE_PROFILE_ID", func(c *Config, v string) error {
+			return setInt(&c.Sonarr.LanguageProfileID, v)
+		}},
 		{"WEB", "PORT", func(c *Config, v string) error { return setInt(&c.Web.Port, v) }},
 		{"WEB", "HOST", func(c *Config, v string) error { c.Web.Host = v; return nil }},
 		{"SUBTITLE", "FORCED_RATIO_THRESHOLD", func(c *Config, v string) error {

@@ -29,11 +29,14 @@ radarr:
   enabled: false
   url: http://radarr.local:7878
   api_key: radarr-key
+  quality_profile_id: 4
 
 sonarr:
   enabled: true
   url: http://sonarr.local:8989
   api_key: sonarr-key
+  quality_profile_id: 5
+  language_profile_id: 6
 
 web:
   port: 9090
@@ -83,8 +86,8 @@ func TestLoadYAML(t *testing.T) {
 					MakeMKV: MakeMKV{Key: "mk-license", MinTrackDuration: 90},
 					TMDB:    TMDB{APIKey: "tmdb-token", AutoConfirmThreshold: floatPtr(0.85)},
 					Output:  Output{Movies: "/srv/movies", Music: "/srv/music", Temp: "/var/tmp/ama"},
-					Radarr:  Arr{Enabled: false, URL: "http://radarr.local:7878", APIKey: "radarr-key"},
-					Sonarr:  Arr{Enabled: true, URL: "http://sonarr.local:8989", APIKey: "sonarr-key"},
+					Radarr:  Arr{Enabled: false, URL: "http://radarr.local:7878", APIKey: "radarr-key", QualityProfileID: 4},
+					Sonarr:  Arr{Enabled: true, URL: "http://sonarr.local:8989", APIKey: "sonarr-key", QualityProfileID: 5, LanguageProfileID: 6},
 					Web:     Web{Port: 9090, Host: "127.0.0.1"},
 					Subtitle: Subtitle{
 						ForcedRatioThreshold: 0.4,
@@ -302,6 +305,25 @@ func TestEnvOverrides(t *testing.T) {
 			},
 		},
 		{
+			name: "radarr and sonarr profile ids",
+			env: map[string]string{
+				"AMA_RADARR_QUALITY_PROFILE_ID":  "4",
+				"AMA_SONARR_QUALITY_PROFILE_ID":  "5",
+				"AMA_SONARR_LANGUAGE_PROFILE_ID": "6",
+			},
+			check: func(t *testing.T, c *Config) {
+				if c.Radarr.QualityProfileID != 4 {
+					t.Errorf("radarr.quality_profile_id = %d, want 4", c.Radarr.QualityProfileID)
+				}
+				if c.Sonarr.QualityProfileID != 5 {
+					t.Errorf("sonarr.quality_profile_id = %d, want 5", c.Sonarr.QualityProfileID)
+				}
+				if c.Sonarr.LanguageProfileID != 6 {
+					t.Errorf("sonarr.language_profile_id = %d, want 6", c.Sonarr.LanguageProfileID)
+				}
+			},
+		},
+		{
 			name: "double underscore nesting is also accepted",
 			env:  map[string]string{"AMA_OUTPUT__MUSIC": "/media/music"},
 			check: func(t *testing.T, c *Config) {
@@ -464,6 +486,7 @@ func TestValidate(t *testing.T) {
 		c := Default()
 		c.TMDB.APIKey = "tmdb"
 		c.Radarr.APIKey = "radarr"
+		c.Radarr.QualityProfileID = 1
 		return c
 	}
 
@@ -491,6 +514,18 @@ func TestValidate(t *testing.T) {
 			wantErr: []string{"radarr.url", "radarr.api_key"},
 		},
 		{
+			name:    "radarr enabled without quality profile id",
+			mutate:  func(c *Config) { c.Radarr.QualityProfileID = 0 },
+			wantErr: []string{"radarr.quality_profile_id"},
+		},
+		{
+			name: "radarr does not require a language profile id",
+			mutate: func(c *Config) {
+				c.Radarr.QualityProfileID = 1
+				c.Radarr.LanguageProfileID = 0
+			},
+		},
+		{
 			name: "sonarr disabled needs nothing",
 			mutate: func(c *Config) {
 				c.Sonarr.Enabled = false
@@ -501,6 +536,23 @@ func TestValidate(t *testing.T) {
 			name:    "sonarr enabled without api key",
 			mutate:  func(c *Config) { c.Sonarr.Enabled = true },
 			wantErr: []string{"sonarr.api_key"},
+		},
+		{
+			name: "sonarr enabled without profile ids",
+			mutate: func(c *Config) {
+				c.Sonarr.Enabled = true
+				c.Sonarr.APIKey = "sonarr"
+			},
+			wantErr: []string{"sonarr.quality_profile_id", "sonarr.language_profile_id"},
+		},
+		{
+			name: "sonarr enabled with both profile ids",
+			mutate: func(c *Config) {
+				c.Sonarr.Enabled = true
+				c.Sonarr.APIKey = "sonarr"
+				c.Sonarr.QualityProfileID = 1
+				c.Sonarr.LanguageProfileID = 1
+			},
 		},
 		{
 			name:    "port too low",
