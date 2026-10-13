@@ -196,8 +196,7 @@ func TestRipSuccess(t *testing.T) {
 	}
 
 	wantArgs := []string{
-		"whipper", "cd", "rip",
-		"-d", "/dev/sr0",
+		"whipper", "cd", "-d", "/dev/sr0", "rip",
 		"-R", testRelease().MBReleaseID,
 		"-O", outputRoot,
 		"--track-template", trackTemplate,
@@ -317,6 +316,19 @@ func TestLogPathSanitizesSlashes(t *testing.T) {
 	release := musicbrainz.Release{Artist: "AC/DC", Album: "T.N.T."}
 	got := logPath("/music", release)
 	want := filepath.Join("/music", "AC_DC", "T.N.T.", "AC_DC - T.N.T..log")
+	if got != want {
+		t.Errorf("logPath = %q, want %q", got, want)
+	}
+}
+
+// TestLogPathSanitizesLeadingDot pins whipper's dot=True PathFilter
+// default (verified against whipper/common/path.py, see logPath's doc
+// comment): only a *leading* dot is replaced, so an internal "." -- as in
+// "T.N.T." above -- is left alone.
+func TestLogPathSanitizesLeadingDot(t *testing.T) {
+	release := musicbrainz.Release{Artist: ".38 Special", Album: "Wild-Eyed Southern Boys"}
+	got := logPath("/music", release)
+	want := filepath.Join("/music", "_38 Special", "Wild-Eyed Southern Boys", "_38 Special - Wild-Eyed Southern Boys.log")
 	if got != want {
 		t.Errorf("logPath = %q, want %q", got, want)
 	}

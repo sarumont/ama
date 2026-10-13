@@ -234,7 +234,7 @@ func (c *Client) Identify(ctx context.Context, device string) (*LookupResult, er
 		return nil, errors.New("cd: identify: device is required")
 	}
 
-	stdout, stderr, runErr := c.runner().RunCapture(ctx, c.binary(), "cd", "info", "-d", device)
+	stdout, stderr, runErr := c.runner().RunCapture(ctx, c.binary(), "cd", "-d", device, "info")
 	if runErr != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("%w: %v", ctxErr, runErr)
@@ -313,8 +313,7 @@ func (c *Client) Rip(ctx context.Context, device string, release musicbrainz.Rel
 	}
 
 	args := []string{
-		"cd", "rip",
-		"-d", device,
+		"cd", "-d", device, "rip",
 		"-R", release.MBReleaseID,
 		"-O", outputRoot,
 		"--track-template", trackTemplate,
@@ -356,11 +355,19 @@ func (c *Client) Rip(ctx context.Context, device string, release musicbrainz.Rel
 // '%A/%d/%A - %d' and the given confirmed release, so Rip can find it
 // without scraping whipper's own stdout for a path.
 //
-// whipper sanitizes template substitutions that are not safe path
-// components; this mirrors only the one case that actually turns up in
-// practice -- a literal "/" inside an artist or album name, e.g. "AC/DC" --
-// rather than replicating whipper's full sanitizer. See "Needs input" in the
-// PR description: this is unverified against a real whipper run.
+// whipper sanitizes every template substitution through its own
+// PathFilter (whipper/common/path.py) before building a path from it.
+// Verified against whipper's actual source rather than guessed: PathFilter
+// takes its dot/posix/vfat/whitespace/printable switches from
+// whipper.conf's path_filter_* keys, defaulting (when unset) to
+// dot=True, posix=True, vfat=False, whitespace=False, printable=False.
+// AMA's XDG_CONFIG_HOME (see the package doc) always points whipper at an
+// empty config dir with no whipper.conf of its own, so these defaults are
+// what actually runs on every AMA-driven invocation. At those defaults,
+// PathFilter only ever replaces two things, both with "_": a leading "."
+// (dot=True), and any "/" or NUL byte (posix=True) anywhere in the string.
+// Nothing else -- whitespace, non-ASCII, and every other character pass
+// through untouched.
 func logPath(outputRoot string, release musicbrainz.Release) string {
 	artist := sanitizePathComponent(release.Artist)
 	album := sanitizePathComponent(release.Album)
@@ -368,8 +375,15 @@ func logPath(outputRoot string, release musicbrainz.Release) string {
 	return filepath.Join(outputRoot, artist, album, name+".log")
 }
 
+// sanitizePathComponent mirrors whipper's PathFilter at its default
+// settings -- see logPath's doc comment for how that was verified.
 func sanitizePathComponent(s string) string {
-	return strings.ReplaceAll(s, "/", "_")
+	s = strings.ReplaceAll(s, "/", "_")
+	s = strings.ReplaceAll(s, "\x00", "_")
+	if strings.HasPrefix(s, ".") {
+		s = "_" + s[1:]
+	}
+	return s
 }
 
 func (c *Client) binary() string {

@@ -3,6 +3,6 @@
 # are invented; a real capture would name an actual release.
 whipper
 cd
-info
 -d
 /dev/sr0
+info

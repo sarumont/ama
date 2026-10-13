@@ -3,6 +3,6 @@
 # hard error, unlike the cd-info-no-match case.
 whipper
 cd
-info
 -d
 /dev/sr0
+info
