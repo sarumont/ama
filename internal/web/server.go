@@ -17,9 +17,11 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -56,7 +58,7 @@ type Options struct {
 type Server struct {
 	cfg   *config.Config
 	log   *slog.Logger
-	tmpl  *template.Template
+	pages map[string]*template.Template
 	mux   *http.ServeMux
 	http  *http.Server
 	ready chan struct{}
@@ -74,7 +76,7 @@ func New(opts Options) (*Server, error) {
 		logger = slog.Default()
 	}
 
-	tmpl, err := template.ParseFS(templateFS, "templates/*.html")
+	pages, err := loadTemplates(templateFS)
 	if err != nil {
 		return nil, fmt.Errorf("web: parsing templates: %w", err)
 	}
@@ -82,7 +84,7 @@ func New(opts Options) (*Server, error) {
 	s := &Server{
 		cfg:   opts.Config,
 		log:   logger,
-		tmpl:  tmpl,
+		pages: pages,
 		ready: make(chan struct{}),
 	}
 	s.mux = s.routes()
@@ -94,6 +96,37 @@ func New(opts Options) (*Server, error) {
 		IdleTimeout:       idleTimeout,
 	}
 	return s, nil
+}
+
+// loadTemplates parses templates/layout.html as a base, then parses each
+// other templates/*.html file into its own clone of that base, keyed by
+// filename. Each page therefore gets its own independent "title"/"content"
+// definitions rather than sharing one *template.Template — see the comment
+// atop layout.html for why that isolation matters.
+func loadTemplates(fsys embed.FS) (map[string]*template.Template, error) {
+	base, err := template.New("layout.html").ParseFS(fsys, "templates/layout.html")
+	if err != nil {
+		return nil, fmt.Errorf("parsing layout.html: %w", err)
+	}
+
+	matches, err := fs.Glob(fsys, "templates/*.html")
+	if err != nil {
+		return nil, err
+	}
+
+	pages := make(map[string]*template.Template)
+	for _, m := range matches {
+		name := path.Base(m)
+		if name == "layout.html" {
+			continue
+		}
+		page, err := template.Must(base.Clone()).ParseFS(fsys, m)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", name, err)
+		}
+		pages[name] = page
+	}
+	return pages, nil
 }
 
 // routes is the single owner of the route table.
@@ -184,36 +217,51 @@ func (s *Server) Addr() string { return s.addr }
 // Ready is closed once the server is listening.
 func (s *Server) Ready() <-chan struct{} { return s.ready }
 
-// placeholder renders the stand-in page for a view whose handler has not landed
-// yet. It exercises the full template pipeline so the plumbing is testable
-// ahead of the real handlers.
-func (s *Server) placeholder(w http.ResponseWriter, title string) {
-	data := struct {
-		Title   string
-		Message string
-	}{Title: title, Message: "Not yet implemented."}
+// render executes page's "layout" template — which pulls in that page's own
+// "title"/"content" definitions, see layout.html — and writes the result
+// with status, or a 500 if execution fails.
+func (s *Server) render(w http.ResponseWriter, status int, page string, data any) {
+	tmpl, ok := s.pages[page]
+	if !ok {
+		s.log.Error("rendering template", "template", page, "err", "no such page")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	var buf bytes.Buffer
-	if err := s.tmpl.ExecuteTemplate(&buf, "placeholder.html", data); err != nil {
-		s.log.Error("rendering template", "template", "placeholder.html", "err", err)
+	if err := tmpl.ExecuteTemplate(&buf, "layout", data); err != nil {
+		s.log.Error("rendering template", "template", page, "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusNotImplemented)
+	w.WriteHeader(status)
 	_, _ = buf.WriteTo(w)
 }
 
+// placeholder renders the stand-in page for a view whose handler has not landed
+// yet. It exercises the full template pipeline so the plumbing is testable
+// ahead of the real handlers.
+func (s *Server) placeholder(w http.ResponseWriter, r *http.Request, title string) {
+	data := struct {
+		Title       string
+		Message     string
+		CurrentPath string
+	}{Title: title, Message: "Not yet implemented.", CurrentPath: r.URL.Path}
+
+	s.render(w, http.StatusNotImplemented, "placeholder.html", data)
+}
+
 func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
-	s.placeholder(w, "Queue")
+	s.placeholder(w, r, "Queue")
 }
 
 func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
-	s.placeholder(w, "Confirm "+r.PathValue("id"))
+	s.placeholder(w, r, "Confirm "+r.PathValue("id"))
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	s.placeholder(w, "History")
+	s.placeholder(w, r, "History")
 }
 
 // handleStatus returns an HTMX fragment, not a page, so it skips the template.
