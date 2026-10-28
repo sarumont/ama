@@ -1,0 +1,94 @@
+name: Docker
+
+# Builds ama-base (Dockerfile.base) — the publishable half of the image
+# split described in Dockerfile.base's header comment. Nothing MakeMKV-
+# related is built here: the top-level Dockerfile's makemkv-builder stage
+# is gated on MAKEMKV_ACCEPT_EULA, which nobody can accept on CI's behalf,
+# so CI only ever touches ama-base.
+#
+# - build-base runs on every PR/push, build only, to catch Dockerfile
+#   regressions before merge.
+# - publish-base runs only on push to main and additionally pushes to
+#   ghcr.io/sarumont/ama-base, tagged with the commit SHA and `latest`.
+#   Uses the ambient GITHUB_TOKEN — no new secrets required (see
+#   `permissions:` below and https://docs.github.com/en/actions/publishing-packages/publishing-docker-images).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-base:
+    name: build ama-base (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ama-base
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          push: false
+          load: true
+          tags: ama-base:ci
+
+      # Enforces the #52 acceptance criteria that were previously only
+      # asserted in prose: ama-base must contain no MakeMKV binary, and must
+      # actually contain everything else the pipeline shells out to.
+      - name: Smoke test ama-base image
+        run: |
+          docker run --rm ama-base:ci sh -c '
+            set -eu
+            if command -v makemkvcon >/dev/null; then
+              echo "ERROR: makemkvcon must not be present in ama-base" >&2
+              exit 1
+            fi
+            for bin in ama ffmpeg ffprobe mkvmerge mkvpropedit tesseract whipper pgsrip; do
+              command -v "$bin" >/dev/null || { echo "ERROR: $bin missing from ama-base" >&2; exit 1; }
+            done
+          '
+
+  publish-base:
+    name: publish ama-base to GHCR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-base
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ama-base
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          push: true
+          tags: |
+            ghcr.io/sarumont/ama-base:${{ github.sha }}
+            ghcr.io/sarumont/ama-base:latest
