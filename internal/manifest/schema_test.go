@@ -139,6 +139,16 @@ func TestUnmarshalCD(t *testing.T) {
 	if m.Identification.TMDBID != nil {
 		t.Errorf("Identification.TMDBID = %v, want nil on a CD", *m.Identification.TMDBID)
 	}
+	if got := len(m.Identification.Candidates); got != 1 {
+		t.Fatalf("len(Candidates) = %d, want 1", got)
+	}
+	candidate := m.Identification.Candidates[0]
+	if candidate.Album != "The Education of a Wandering Man" {
+		t.Errorf("Candidates[0].Album = %q", candidate.Album)
+	}
+	if candidate.TMDBID != 0 || candidate.Title != "" {
+		t.Errorf("Candidates[0] carries Blu-ray fields: TMDBID=%d Title=%q", candidate.TMDBID, candidate.Title)
+	}
 
 	if got := len(m.Tracks); got != 1 {
 		t.Fatalf("len(Tracks) = %d, want 1", got)
@@ -172,6 +182,7 @@ func TestMarshalOmitsOtherVariant(t *testing.T) {
 	cd := New(DiscTypeCD, "/dev/sr0")
 	number := 1
 	cd.Tracks = []Track{{Number: &number, Title: "Where I Need to Be", DurationSeconds: 207}}
+	cd.Identification.Candidates = []Candidate{{MBReleaseID: "b3f0a4a1", Artist: "Jamestown Revival", Album: "Wandering Man", Year: 2014, Score: 0.94}}
 
 	encoded, err := json.Marshal(cd)
 	if err != nil {
@@ -187,6 +198,12 @@ func TestMarshalOmitsOtherVariant(t *testing.T) {
 	for _, key := range []string{"makemkv_index", "role", "edition", "size_bytes"} {
 		if _, ok := track[key]; ok {
 			t.Errorf("CD track carries Blu-ray key %q", key)
+		}
+	}
+	candidate := decoded["identification"].(map[string]any)["candidates"].([]any)[0].(map[string]any)
+	for _, key := range []string{"tmdb_id", "title"} {
+		if _, ok := candidate[key]; ok {
+			t.Errorf("CD candidate carries Blu-ray key %q", key)
 		}
 	}
 

@@ -1,0 +1,167 @@
+{{/*
+  confirm.html is the "/confirm/:id" view: the one hard gate in the
+  pipeline. It shows the disc as identified, lets the user pick (or search
+  for) the right candidate, and previews the manifest that will result.
+
+  Data: confirmViewData (handlers.go) — CurrentPath, Manifest (the full
+  *manifest.Manifest, for fields with no pointer types to worry about),
+  DiscLabel/Confidence/ConfirmedAt (Manifest fields that are pointers,
+  pre-resolved to display strings), and Tracks/Subtitles (manifest.Track /
+  manifest.Subtitle wrapped with their own pointer fields pre-resolved —
+  see trackRow/subtitleRow in handlers.go).
+
+  The candidate-select, role-override and forced-subtitle controls below
+  POST to /confirm/:id, /api/tracks/:id/:index/role and
+  /api/subtitles/:id/:stream_index/forced — the endpoints #23 will add.
+  Those routes don't exist yet, so submitting any of these forms today 404s;
+  the markup is wired ahead of time so #23 only has to add the handlers.
+*/}}
+
+{{define "title"}}Confirm — {{.DiscLabel}}{{end}}
+
+{{define "content"}}
+<h1>Confirm Identification</h1>
+
+<section class="disc-info">
+  <h2>Disc</h2>
+  <dl>
+    <dt>Label</dt><dd>{{.DiscLabel}}</dd>
+    <dt>Device</dt><dd>{{.Manifest.Disc.Device}}</dd>
+    <dt>Type</dt><dd>{{.Manifest.Disc.Type}}</dd>
+    <dt>Status</dt><dd>{{template "status-badge" .Manifest.Status}}</dd>
+  </dl>
+  {{template "warnings" .Manifest}}
+</section>
+
+<section class="candidates">
+  <h2>Candidates</h2>
+  {{if .Manifest.Identification.Candidates}}
+  <ol class="candidate-list">
+    {{range $i, $c := .Manifest.Identification.Candidates}}
+    <li class="candidate{{if eq $i 0}} candidate-top{{end}}">
+      {{if eq $.Manifest.Disc.Type "bluray"}}
+        <strong>{{$c.Title}}</strong> ({{$c.Year}}) — score {{printf "%.2f" $c.Score}} — TMDB {{$c.TMDBID}}
+      {{else}}
+        <strong>{{$c.Artist}} — {{$c.Album}}</strong> ({{$c.Year}}) — score {{printf "%.2f" $c.Score}} — release {{$c.MBReleaseID}}
+      {{end}}
+      <form hx-post="/confirm/{{$.Manifest.ID}}" hx-target="body">
+        {{if eq $.Manifest.Disc.Type "bluray"}}
+          <input type="hidden" name="tmdb_id" value="{{$c.TMDBID}}">
+        {{else}}
+          <input type="hidden" name="mb_release_id" value="{{$c.MBReleaseID}}">
+        {{end}}
+        <button type="submit">Select</button>
+      </form>
+    </li>
+    {{end}}
+  </ol>
+  {{else}}
+  <p class="pending">No candidates yet.</p>
+  {{end}}
+
+  <form class="manual-search" hx-post="/confirm/{{.Manifest.ID}}" hx-target="body">
+    <label for="query">Not right? Search manually:</label>
+    <input type="text" id="query" name="query" placeholder="Title, or artist / album">
+    <button type="submit">Search</button>
+  </form>
+</section>
+
+<section class="manifest-preview">
+  <h2>Manifest Preview</h2>
+  <dl>
+    <dt>Method</dt><dd>{{.Manifest.Identification.Method}}</dd>
+    {{if eq .Manifest.Disc.Type "bluray"}}
+      <dt>Title</dt><dd>{{.Manifest.Identification.Title}}</dd>
+    {{else}}
+      <dt>Artist</dt><dd>{{.Manifest.Identification.Artist}}</dd>
+      <dt>Album</dt><dd>{{.Manifest.Identification.Album}}</dd>
+    {{end}}
+    <dt>Year</dt><dd>{{.Manifest.Identification.Year}}</dd>
+    {{if .Confidence}}<dt>Confidence</dt><dd>{{.Confidence}}</dd>{{end}}
+    <dt>Confirmed</dt><dd>{{if .Manifest.Identification.Confirmed}}Yes{{if .Manifest.Identification.ConfirmedBy}} ({{.Manifest.Identification.ConfirmedBy}}{{if .ConfirmedAt}}, {{.ConfirmedAt}}{{end}}){{end}}{{else}}No{{end}}</dd>
+    <dt>Output path</dt><dd>{{.Manifest.Output.Path}}</dd>
+    {{if .Manifest.Output.MainFeature}}<dt>Main feature</dt><dd>{{.Manifest.Output.MainFeature}}</dd>{{end}}
+    {{if .Manifest.Output.ProcessedFeature}}<dt>Processed feature</dt><dd>{{.Manifest.Output.ProcessedFeature}}</dd>{{end}}
+  </dl>
+</section>
+
+<section class="tracks">
+  <h2>Tracks</h2>
+  {{if .Tracks}}
+  <table>
+    {{if eq .Manifest.Disc.Type "bluray"}}
+    <thead><tr><th>Index</th><th>Duration</th><th>Size</th><th>Role</th><th>Reason</th><th>Output</th><th>Override role</th></tr></thead>
+    <tbody>
+      {{range .Tracks}}
+      <tr{{if .Flagged}} class="row-flagged"{{end}}>
+        <td>{{.IndexDisplay}}</td>
+        <td>{{.DurationDisplay}}</td>
+        <td>{{.SizeDisplay}}</td>
+        <td>{{.Role}}{{if .Flagged}} <span class="flag">Needs review — alternate cut</span>{{end}}</td>
+        <td>{{.RoleReason}}</td>
+        <td>{{.OutputFile}}</td>
+        <td>
+          <form hx-post="/api/tracks/{{$.Manifest.ID}}/{{.IndexDisplay}}/role" hx-target="closest tr">
+            <select name="role">
+              <option value="feature"{{if eq .Role "feature"}} selected{{end}}>feature</option>
+              <option value="alternate_cut"{{if eq .Role "alternate_cut"}} selected{{end}}>alternate_cut</option>
+              <option value="commentary"{{if eq .Role "commentary"}} selected{{end}}>commentary</option>
+              <option value="extra"{{if eq .Role "extra"}} selected{{end}}>extra</option>
+            </select>
+            <button type="submit">Update</button>
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+    {{else}}
+    <thead><tr><th>#</th><th>Title</th><th>Duration</th><th>AccurateRip</th><th>Output</th></tr></thead>
+    <tbody>
+      {{range .Tracks}}
+      <tr>
+        <td>{{.Number}}</td>
+        <td>{{.Title}}</td>
+        <td>{{.DurationDisplay}}</td>
+        <td>{{.AccurateRipDisplay}}</td>
+        <td>{{.OutputFile}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+    {{end}}
+  </table>
+  {{else}}
+  <p class="pending">Ripping hasn't run yet — tracks will appear here.</p>
+  {{end}}
+</section>
+
+{{if eq .Manifest.Disc.Type "bluray"}}
+<section class="subtitles">
+  <h2>Subtitles</h2>
+  {{if .Subtitles}}
+  <table>
+    <thead><tr><th>Stream</th><th>Codec</th><th>Lang</th><th>Size</th><th>Forced</th><th>Reason</th><th>Set forced</th></tr></thead>
+    <tbody>
+      {{range .Subtitles}}
+      <tr>
+        <td>{{.StreamIndex}}</td>
+        <td>{{.Codec}}</td>
+        <td>{{.Language}}</td>
+        <td>{{.SizeDisplay}}</td>
+        <td>{{if .ForcedCandidate}}Yes{{else}}No{{end}}</td>
+        <td>{{.ForcedReasonDisplay}}</td>
+        <td>
+          <form hx-post="/api/subtitles/{{$.Manifest.ID}}/{{.StreamIndex}}/forced" hx-target="closest tr">
+            <input type="hidden" name="forced" value="{{if .ForcedCandidate}}false{{else}}true{{end}}">
+            <button type="submit">{{if .ForcedCandidate}}Clear{{else}}Set{{end}} forced</button>
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="pending">Subtitle analysis hasn't run yet.</p>
+  {{end}}
+</section>
+{{end}}
+{{end}}

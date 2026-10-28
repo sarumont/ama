@@ -1,0 +1,59 @@
+{{/*
+  history.html is the "/history" view: every finished rip (complete or
+  error), newest ripped_at first, capped at historyLimit (handlers.go) so a
+  long-running library still renders a usable page.
+
+  Data: historyViewData (handlers.go) — CurrentPath, Rows ([]historyRow, the
+  pointer fields on manifest.Manifest/.Output/.Radarr already resolved to
+  display strings/bools), Truncated and Limit for the cap note.
+*/}}
+
+{{define "title"}}History{{end}}
+
+{{define "content"}}
+<h1>History</h1>
+{{if .Rows}}
+{{if .Truncated}}<p class="note">Showing the {{.Limit}} most recent rips.</p>{{end}}
+<table>
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Type</th>
+      <th>Ripped</th>
+      <th>Status</th>
+      <th>Radarr</th>
+      <th>Output</th>
+      <th>Manifest</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Rows}}
+    <tr class="{{if eq .Status "error"}}row-error{{else if .Warnings}}row-warning{{end}}">
+      <td><a href="/confirm/{{.ID}}">{{.Title}}</a></td>
+      <td>{{.DiscType}}</td>
+      <td>{{.RippedAtDisplay}}</td>
+      <td>{{template "status-badge" .Status}}{{if .Warnings}} <span class="flag">warnings</span>{{end}}</td>
+      <td>
+        {{if .HasRadarr}}
+          added: {{if .RadarrAdded}}yes{{else}}no{{end}}, imported: {{if .RadarrImportTriggered}}yes{{else}}no{{end}}
+        {{else}}
+          —
+        {{end}}
+      </td>
+      <td>
+        {{.OutputPath}}
+        {{if .ProcessedFeature}}<br><small>processed: {{.ProcessedFeature}}</small>
+        {{else if .MainFeature}}<br><small>{{.MainFeature}}</small>{{end}}
+      </td>
+      <td><code>{{.ManifestPath}}</code></td>
+    </tr>
+    {{if or .Warnings .Errors}}
+    <tr class="row-detail"><td colspan="7">{{template "warnings" .}}</td></tr>
+    {{end}}
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="empty-state">Nothing has been ripped yet.</p>
+{{end}}
+{{end}}
