@@ -1,0 +1,42 @@
+# Hand-constructed sample, shaped after whipper 0.10.0's ruamel.yaml
+# round-trip rip log (see the issue #9 spike for the annotated original).
+# State 1: every track accurately ripped.
+Tracks:
+  1:
+    Filename: /music/Test Artist/Test Album/01 - First Track.flac
+    Peak level: 0.988321
+    Extraction quality: 100.00 %
+    Test CRC: A1B2C3D4
+    Copy CRC: A1B2C3D4
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 12
+      Local CRC: DEADBEEF
+      Remote CRC: DEADBEEF
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 9
+      Local CRC: CAFEF00D
+      Remote CRC: CAFEF00D
+    Status: Copy OK
+  2:
+    Filename: /music/Test Artist/Test Album/02 - Second Track.flac
+    Peak level: 0.912345
+    Extraction quality: 100.00 %
+    Test CRC: 11223344
+    Copy CRC: 11223344
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 12
+      Local CRC: 0BADF00D
+      Remote CRC: 0BADF00D
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 9
+      Local CRC: 8BADF00D
+      Remote CRC: 8BADF00D
+    Status: Copy OK
+Conclusive status report:
+  AccurateRip summary: All tracks accurately ripped
+  Health status: No errors occurred
+SHA-256 hash: 3f786850e387550fdab836ed7e6dc881de23001b
