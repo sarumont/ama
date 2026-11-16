@@ -24,6 +24,10 @@ testdata
 
 # Container build files
 Dockerfile
+Dockerfile.base
 .dockerignore
 docker-compose.yml
 docker-compose.*.yml
+
+# Claude Code local state — agent worktrees are full repo copies
+.claude

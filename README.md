@@ -43,7 +43,13 @@ the pipeline needs:
   `--forced-display-flag`/`--default-track-flag` options were added in v74;
   older versions reject them and every mux fails)
 
-Building this container image is itself a project deliverable.
+Building this container image is itself a project deliverable. Everything
+except MakeMKV (whipper, ffmpeg, mkvtoolnix, tesseract, pgsrip, the `ama`
+binary) is published as `ghcr.io/sarumont/ama-base`; the final `ama` image
+layers MakeMKV on top of it locally, since MakeMKV's binary package isn't
+freely redistributable. `docker build` on the top-level `Dockerfile` pulls
+`ama-base` automatically, or you can build it from scratch yourself — see
+[docs/CONFIG.md](docs/CONFIG.md) for both paths.
 
 ## Configuration
 

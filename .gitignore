@@ -11,3 +11,6 @@ coverage.*
 # Local development config (the committed reference lives in docs/CONFIG.md)
 /ama.yaml
 /ama.yml
+
+# Claude Code local state (agent worktrees, settings)
+/.claude/worktrees/
